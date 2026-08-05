@@ -9,19 +9,35 @@ build/
 # 缓存文件
 video_hash_cache.json
 video_hash_cache.json.bak
+video_hash_cache_part*.json
 
 # 导出报表
 similar_result.csv
 duplicate_groups.txt
 duplicate_groups.md
+duplicate_groups.html
 bad_video_list.txt
+duplicate_paths.txt
 hash_export.json
+crash_partial.json
+
+# 清理脚本
 cleanup_duplicates.bat
 cleanup_duplicates.sh
 
 # 日志
 run_log.txt
+cleanup_audit.log
 *.log
+
+# 配置
+duplicate_config.ini
+.duplicateignore
+
+# 虚拟环境
+venv/
+.env/
+.venv/
 
 # 编辑器
 .vscode/
@@ -31,3 +47,8 @@ run_log.txt
 # 系统
 .DS_Store
 Thumbs.db
+
+# Python 缓存
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
