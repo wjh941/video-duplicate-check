@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 echo ============================================
-echo   MP4 视频查重工具 v2.2 - AI 依赖安装脚本
+echo   MP4 视频查重工具 v2.3 - AI 依赖安装脚本
 echo ============================================
 echo.
 echo  本脚本将安装：
@@ -11,7 +11,7 @@ echo.
 echo  注意事项：
 echo    - torch 包体积较大（CPU版约 200MB，GPU版约 2GB+）
 echo    - 如无 NVIDIA GPU，将安装 CPU 版本（速度较慢但功能完整）
-echo    - 建议使用国内镜像源加速下载
+echo    - 已配置国内镜像源加速下载
 echo.
 
 REM 检查 Python
@@ -30,6 +30,11 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+
+REM v2.3 新增：国内镜像源配置
+echo [0/4] 配置国内 pip 镜像源...
+pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+pip config set install.trusted-host pypi.tuna.tsinghua.edu.cn
 
 echo [1/4] 升级 pip...
 python -m pip install --upgrade pip -q
@@ -85,7 +90,7 @@ if errorlevel 1 (
 
 echo.
 echo ============================================
-echo   安装完成！
+echo   安装完成！v2.3 新功能：
 echo ============================================
 echo.
 echo  快速开始：
@@ -94,6 +99,8 @@ echo    python find_mp4.py --dir D:\Videos --semantic   # 开启 AI 分析
 echo    python find_mp4.py semantic-analyze --dir D:\Videos    # 纯 AI 分析
 echo    python find_mp4.py dataset-filter --purpose 监控 --dir D:\Videos  # 筛选数据集
 echo    python find_mp4.py cluster-scene --dir D:\Videos  # 场景聚类
+echo    python find_mp4.py dataset-split --dir D:\Videos   # 数据集分类拆分(v2.3)
+echo    python find_mp4.py clear-semantic-cache           # 清理AI缓存(v2.3)
 echo.
 echo  查看帮助：
 echo    python find_mp4.py --help

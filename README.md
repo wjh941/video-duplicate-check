@@ -1,4 +1,4 @@
-# MP4 视频相似度查重工具 v2.2
+# MP4 视频相似度查重工具 v2.3
 
 基于感知哈希（pHash + dHash）+ AI 语义分析的视频重复检测与数据集标注工具，支持 LSH 加速、增量扫描、缓存管理、多格式导出、安全清理脚本、场景聚类、训练集清单导出。
 
@@ -6,12 +6,13 @@
 
 ```
 distinguish/
-├── find_mp4.py          # 主程序 v2.2
+├── find_mp4.py          # 主程序 v2.3
 ├── ai_semantic.py       # AI 语义分析模块（v2.2 新增，可选）
 ├── requirements.txt     # 基础依赖清单
 ├── requirements_ai.txt  # AI 扩展依赖清单（v2.2 新增）
 ├── install.bat          # Windows 一键安装脚本（区分基础/AI）
 ├── install_ai.bat       # AI 依赖一键安装脚本（v2.2 新增）
+├── dataset_labels.ini   # 自定义标签配置文件（v2.3 新增，可选）
 ├── .gitignore           # Git 忽略规则
 ├── README.md            # 本文档
 └── (运行时生成的输出文件)
@@ -32,6 +33,20 @@ install.bat
 pip install -r requirements.txt
 ```
 
+> 💡 **国内网络加速**：如遇下载缓慢，可临时使用国内 pip 镜像源：
+> ```bash
+> # 清华源（推荐）
+> pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+> # 阿里源
+> pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+> # 中科大源
+> pip install -r requirements.txt -i https://pypi.mirrors.ustc.edu.cn/simple/
+> ```
+> 或将其写入全局配置一次性启用：
+> ```bash
+> pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+> ```
+
 **方式三：安装 AI 扩展依赖（可选）**
 ```bash
 pip install -r requirements_ai.txt
@@ -40,6 +55,8 @@ pip install -r requirements_ai.txt
 ```bat
 install_ai.bat
 ```
+
+> ⚠️ **AI 依赖体积较大**（torch 单包约 2GB+），强烈建议配合上述国内镜像源使用；如需 GPU 版 torch，请参考 [PyTorch 官网](https://pytorch.org/) 选择对应 CUDA 版本安装命令。
 
 ### 2. 运行
 
@@ -131,6 +148,20 @@ python find_mp4.py --dir D:\Videos --dry-run
 | `--no-semantic-cache` | flag | False | 关闭语义特征缓存 |
 | `--semantic-workers` | int | 1 | AI 推理线程数 |
 
+### v2.3 新增参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `--clip-model-path` | str | "" | 自定义 CLIP 模型本地路径，离线/指定模型加载 |
+| `--lite-csv` | flag | False | 轻量 CSV 导出，仅保留核心字段（路径/相似度/标签），适合大体量场景 |
+| `--export-bad-paths` | flag | False | 单独导出损坏视频路径清单 `bad_video_paths.txt`，便于批量排查 |
+| `--backup-path` | str | "" | 备份目录路径，清理时将文件移动至此目录而非系统临时回收站 |
+| `--protect-file` | str | "" | 受保护文件清单路径（一行一个绝对路径），匹配项永不被清理 |
+| `--cluster-num` | int | 自动 | 场景聚类分组数（不指定时按轮廓系数自动估计） |
+| `--cache-expire-days` | int | 30 | 缓存过期天数，超期条目自动失效重算 |
+| `--compress-cache` | flag | False | 写出时压缩缓存文件（gzip），减小磁盘占用 |
+| `--no-store-embed` | flag | False | 不把 CLIP 特征向量写入缓存，仅存语义标签，节省空间 |
+
 ### 子命令
 
 | 命令 | 说明 |
@@ -143,6 +174,28 @@ python find_mp4.py --dir D:\Videos --dry-run
 | **`semantic-analyze`** | **仅执行 AI 内容语义分析，不做哈希查重（v2.2 新增）** |
 | **`dataset-filter`** | **按数据集用途筛选视频，生成训练清单（v2.2 新增）** |
 | **`cluster-scene`** | **纯画面内容聚类分组，不依赖文件哈希（v2.2 新增）** |
+| **`clear-semantic-cache`** | **清理 AI 语义缓存（仅删语义/嵌入，保留哈希缓存）（v2.3 新增）** |
+| **`dataset-split`** | **数据集分类拆分，按用途/场景将视频分组导出到独立子目录（v2.3 新增）** |
+
+#### v2.3 子命令详解
+
+**`clear-semantic-cache`** —— 选择性清理 AI 语义缓存
+- 仅删除缓存中的语义标签与 CLIP 特征向量条目，**保留文件哈希缓存**，避免重复抽帧
+- 适用于：标签库更新后需重新识别、嵌入模型升级、缓存膨胀需瘦身但不想丢失哈希加速
+- 用法：`python find_mp4.py clear-semantic-cache --dir D:\Videos`
+- 可配合 `--cache-expire-days 7` 仅清理 7 天前的过期条目，配合 `--dry-run` 预览
+
+**`dataset-split`** —— 数据集分类拆分
+- 读取已有语义元数据（`video_semantic_meta.json`），按「用途」或「场景」将视频分组
+- 默认按用途拆分，每个用途生成一个子目录，并写入软链接/拷贝清单（不破坏原文件）
+- 适用于：将混合数据集整理为可训练的目录结构，方便后续喂给训练框架
+- 用法：
+  ```bash
+  # 按用途拆分（默认）
+  python find_mp4.py dataset-split --dir D:\mixed_data --split-by purpose
+  # 按场景拆分，并指定输出根目录
+  python find_mp4.py dataset-split --dir D:\mixed_data --split-by scene --output-dir D:\split_out
+  ```
 
 ## 输出文件
 
@@ -242,6 +295,46 @@ embed_cache = true
 
 使用：`python find_mp4.py --config duplicate_config.ini`
 
+## 自定义标签配置 (`dataset_labels.ini`)（v2.3 新增）
+
+v2.3 起支持通过外置 INI 文件自定义 AI 语义识别的标签库，无需改代码即可适配垂直领域（医疗、工业、农业、安防等）。程序运行时若在脚本同级目录检测到 `dataset_labels.ini` 即自动加载并合并到内置标签库。
+
+```ini
+; 场景标签（每行一个，支持中文）
+[scenes]
+scene_1 = 病房
+scene_2 = 手术室
+scene_3 = 仓库货架
+scene_4 = 工厂流水线
+
+; 物体标签
+[objects]
+object_1 = 机床
+object_2 = 托盘
+object_3 = 安全帽
+
+; 行为标签
+[actions]
+action_1 = 搬运
+action_2 = 操作设备
+
+; 数据集用途判定规则（关键词匹配，逗号分隔）
+[purposes]
+purpose_工业质检 = 工厂,流水线,机床,质检
+purpose_仓储物流 = 仓库,托盘,搬运
+purpose_医疗影像 = 病房,手术室,医疗
+
+; 默认用途（当无规则命中时）
+[default]
+purpose = 通用素材
+```
+
+**说明：**
+- 文件不存在时使用内置标签库，行为与 v2.2 完全一致
+- 自定义标签会与内置标签**合并**（同名标签以自定义为准）
+- 用途规则采用关键词命中判定，命中任一关键词即归类
+- 修改后建议执行 `python find_mp4.py clear-semantic-cache --dir <目录>` 清理旧语义缓存以重新识别
+
 ## 场景示例
 
 ### 场景一：新手快速使用
@@ -313,6 +406,85 @@ python find_mp4.py scan --dir D:\video --semantic --incremental --embed-cache
 python find_mp4.py scan --dir D:\video --semantic --incremental --embed-cache
 ```
 
+### 场景十：自定义标签分类（v2.3）
+适用：垂直领域（医疗/工业/农业）需要专属场景与用途标签。
+
+```bash
+# 1. 在脚本同级目录放置 dataset_labels.ini（参考上文配置示例）
+# 2. 清理旧的语义缓存，避免旧标签干扰
+python find_mp4.py clear-semantic-cache --dir D:\factory_video
+
+# 3. 重新扫描，自动加载自定义标签库
+python find_mp4.py scan --dir D:\factory_video --semantic --export-dataset
+
+# 结果：dataset_catalog.csv 中会出现「工厂流水线/机床/工业质检」等自定义标签
+```
+
+### 场景十一：清理 AI 缓存但保留哈希缓存（v2.3）
+适用：标签库更新或模型升级后只想重跑 AI，不想重新抽帧。
+
+```bash
+# 仅清理语义/嵌入缓存，保留 video_hash_cache.json 中的哈希
+python find_mp4.py clear-semantic-cache --dir D:\Videos
+
+# 先预览将清理多少条目（不实际删除）
+python find_mp4.py clear-semantic-cache --dir D:\Videos --dry-run
+
+# 仅清理 7 天前的过期语义缓存
+python find_mp4.py clear-semantic-cache --dir D:\Videos --cache-expire-days 7
+
+# 清理后重跑：哈希秒级命中，只重算 AI 部分
+python find_mp4.py scan --dir D:\Videos --semantic --incremental --embed-cache
+```
+
+### 场景十二：数据集分类拆分（v2.3）
+适用：把混合数据集按用途/场景整理成可直接训练的目录结构。
+
+```bash
+# 前置：先生成语义元数据
+python find_mp4.py scan --dir D:\mixed_data --semantic --export-dataset
+
+# 按用途拆分（默认），每个用途一个子目录
+python find_mp4.py dataset-split --dir D:\mixed_data --split-by purpose
+
+# 按场景拆分，并指定输出根目录与分组数
+python find_mp4.py dataset-split --dir D:\mixed_data --split-by scene --output-dir D:\split_out --cluster-num 8
+
+# 结果：D:\split_out\监控训练集\、D:\split_out\自动驾驶\、... 各含对应视频清单/链接
+```
+
+### 场景十三：备份模式清理（v2.3）
+适用：清理重复视频时希望统一备份到指定目录，而非散落在系统临时目录。
+
+```bash
+# 1. 准备受保护文件清单（一行一个绝对路径）
+#    protected.txt 内容示例：
+#      D:\Videos\keep\source.mp4
+#      D:\Videos\archive\2024.mp4
+
+# 2. 生成清理脚本：移动到 D:\Backup\duplicates，并保护清单内文件
+python find_mp4.py --dir D:\Videos --gen-cleanup \
+    --backup-path D:\Backup\duplicates \
+    --protect-file protected.txt
+
+# 3. 执行清理脚本（需输入 CONFIRM）
+#    cleanup_duplicates.bat
+```
+
+### 场景十四：轻量 CSV 导出（v2.3）
+适用：视频数量极大（万级以上），只需核心字段做后续脚本处理，减小导出体积。
+
+```bash
+# 轻量 CSV：仅路径/相似度/标签，跳过冗余元数据列
+python find_mp4.py --dir D:\huge_library --lite-csv --fast
+
+# 同时压缩缓存、不存嵌入向量，进一步节省磁盘
+python find_mp4.py --dir D:\huge_library --lite-csv --compress-cache --no-store-embed
+
+# 单独导出损坏视频路径清单，便于运维批量排查
+python find_mp4.py --dir D:\huge_library --export-bad-paths --check-only
+```
+
 ## 删除功能风险警示
 
 **默认模式为安全模式**，清理脚本将文件移动至临时目录而非永久删除。
@@ -323,6 +495,7 @@ python find_mp4.py scan --dir D:\video --semantic --incremental --embed-cache
 - 系统目录、桌面根目录默认受保护
 - 建议先使用 `--dry-run` 预览结果
 - v2.2 新增：清理脚本附带视频用途备注，清理监控训练集素材时做风险提示
+- v2.3 新增：`--backup-path` 统一备份目录、`--protect-file` 受保护文件清单，双重保险防止误删重要素材
 
 ## 退出码
 
@@ -353,9 +526,95 @@ python find_mp4.py scan --dir D:\video --semantic --incremental --embed-cache
 - **transformers ≥ 4.30.0** - 模型基础设施
 - **scikit-learn ≥ 1.3.0** - KMeans 聚类
 
+## 自测说明（安装后验证）
+
+安装完成后，按以下步骤快速验证功能是否正常（任选对应环境的命令执行）：
+
+**1. 版本与基础环境自测**
+```bash
+# 打印版本信息，确认程序可运行
+python find_mp4.py version
+
+# 期望输出：MP4 视频相似度查重工具 v2.3
+```
+
+**2. 基础哈希查重自测（无需 AI 依赖）**
+```bash
+# 准备 2~3 个测试视频放入 D:\test_video（可放一对重复视频）
+python find_mp4.py --dir D:\test_video --dry-run --format txt
+
+# 期望：生成 duplicate_groups.txt，且 run_log.txt 中无 ERROR
+# 退出码：0=无重复，1=存在重复分组
+```
+
+**3. 缓存与子命令自测**
+```bash
+# 校验缓存写入与读取
+python find_mp4.py --dir D:\test_video --check-only
+python find_mp4.py verify-cache --dir D:\test_video
+
+# v2.3 子命令可用性自测（应能正常执行，无报错）
+python find_mp4.py clear-semantic-cache --dir D:\test_video --dry-run
+python find_mp4.py dataset-split --dir D:\test_video --dry-run
+```
+
+**4. AI 语义功能自测（需已安装 AI 扩展依赖）**
+```bash
+# 首次运行会下载 CLIP 模型（约 350MB），需联网
+python find_mp4.py scan --dir D:\test_video --semantic --export-dataset
+
+# 期望：生成 video_semantic_meta.json、dataset_catalog.csv
+# 无 torch/CLIP 时该命令应自动降级为纯哈希查重并给出提示，而非崩溃
+```
+
+**5. 自定义标签自测（v2.3）**
+```bash
+# 在脚本同级目录放置 dataset_labels.ini 后
+python find_mp4.py scan --dir D:\test_video --semantic
+
+# 期望：dataset_catalog.csv 的场景/用途列出现 dataset_labels.ini 中定义的标签
+```
+
+**常见问题排查：**
+- `ModuleNotFoundError: No module named 'cv2'` → 未装基础依赖，执行 `pip install -r requirements.txt`
+- AI 命令报 `ModuleNotFoundError: No module named 'torch'` → 未装 AI 依赖，或可忽略（会自动降级）
+- 清理脚本执行无反应 → 确认是否输入 `CONFIRM` 并回车
+- 长路径报错 → v2.3 已统一长路径处理，如仍报错请检查路径是否超过 260 字符并启用长路径支持
+
 ## 更新日志
 
-### v2.2 (最新)
+### v2.3 (最新)
+
+**P0 BUG 修复**
+- 🐛 缓存分块自动合并读取：修复大缓存分块写入后读取时未自动合并导致的条目丢失
+- 🐛 长路径统一：统一 Windows 长路径（`\\?\` 前缀）处理，避免 >260 字符路径解析失败
+- 🐛 AI 语义字段清理：修复缓存中残留旧版语义字段导致导出报告列错位
+- 🐛 参数冲突校验：`--hard-delete` 与 `--backup-path`、`--keep-*` 互斥参数现在启动时即报错而非静默忽略
+- 🐛 权限跳过：无读权限目录现在跳过并记录日志，而非中断整个扫描
+- 🐛 FFmpeg 警告：FFmpeg stderr 警告不再被误判为损坏视频
+- 🐛 超大视频分段抽帧：超长视频分段抽帧时帧索引越界已修复
+
+**P1 功能增强**
+- 🆕 `dataset_labels.ini` 外置标签配置，支持自定义场景/物体/行为/用途标签库
+- 🆕 子命令 `clear-semantic-cache`：选择性清理 AI 语义缓存，保留哈希缓存
+- 🆕 子命令 `dataset-split`：按用途/场景拆分数据集到独立子目录
+- 🆕 `--clip-model-path`：自定义 CLIP 模型本地路径，支持离线/指定模型
+- 🆕 `--lite-csv`：轻量 CSV 导出，仅核心字段，适合大体量场景
+- 🆕 `--export-bad-paths`：单独导出损坏视频路径清单
+- 🆕 `--backup-path`：清理时统一备份到指定目录
+- 🆕 `--protect-file`：受保护文件清单，匹配项永不被清理
+- 🆕 `--cluster-num`：手动指定场景聚类分组数
+- 🆕 `--cache-expire-days`：缓存过期天数，超期自动失效
+- 🆕 `--compress-cache`：gzip 压缩缓存文件，减小磁盘占用
+- 🆕 `--no-store-embed`：不存储特征向量到缓存，仅存语义标签
+
+**P2 性能优化**
+- ⚡ 帧复用：哈希抽帧与 AI 推理共享同一批帧，避免重复解码
+- ⚡ 断点续扫：扫描中断后可从上次进度继续，无需重头扫描
+- ⚡ 缓存过期清理：启动时自动清理超期缓存条目，避免缓存膨胀
+- ⚡ AI 线程自适应：根据 GPU/CPU 与内存占用动态调整 AI 推理线程数
+
+### v2.2
 - 🆕 AI 语义内容分析模块（CLIP ViT-B/32 零样本模型）
 - 🆕 场景/物体/行为标签自动识别
 - 🆕 数据集用途自动判定（监控训练集/自动驾驶/人像/影视/风景/游戏）

@@ -514,9 +514,11 @@ def semantic_analyze_video(
     device: str,
     num_frames: int = 10,
     scene_thresh: float = 0.6,
+    cached_frames: list = None,  # v2.3 新增：帧复用，避免重复解码
 ) -> dict:
     """
     主入口：对单个视频进行完整语义分析。
+    v2.3 增强：支持 cached_frames 帧复用，避免重复打开视频解码。
     返回 dict:
     {
         "scene_tags": [...],
@@ -541,8 +543,12 @@ def semantic_analyze_video(
             "is_training_ready": False,
         }
 
-    # 1. 采样帧
-    frames = _sample_video_frames(video_path, num_frames)
+    # v2.3 新增：帧复用 - 如果已有缓存的 PIL 帧直接使用，避免重复解码
+    if cached_frames and len(cached_frames) > 0:
+        frames = cached_frames
+    else:
+        # 1. 采样帧
+        frames = _sample_video_frames(video_path, num_frames)
     if not frames:
         return {
             "scene_tags": [],

@@ -69,6 +69,14 @@ _temp_frames/
 _temp_embeddings*.npy
 semantic_cache*.npy
 
+# v2.3 新增：压缩缓存、断点续扫、数据集拆分
+*.gz
+scan_progress.json
+bad_video_paths.txt
+cleanup_audit_*.log
+dataset_split/
+split_catalog.txt
+
 # Python 缓存
 .mypy_cache/
 .pytest_cache/
