@@ -1,35 +1,38 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MP4 视频相似度查重工具 v2.1
+MP4 视频相似度查重工具 v2.2
 ==============================
 功能：扫描指定目录下的视频文件，基于多哈希融合（pHash+dHash）检测内容相似/重复的视频。
 支持 LSH 加速、增量扫描、缓存管理、多格式导出、安全清理、子命令架构。
+v2.2 新增：AI 语义内容分析、场景聚类、数据集自动标注、训练集清单导出。
 
 模块结构：
-    0. 全局配置常量 + 退出码
+    0. 全局配置常量 + 退出码 + AI依赖检测
     1. 日志系统（双输出 + quiet 模式）
     2. 命令行参数解析（子命令 + 扁平参数兼容）
     3. 文件扫描与过滤（多后缀 + 排除规则 + .duplicateignore）
-    4. 哈希缓存管理（版本化 + 分块 + 合并/校验）
+    4. 哈希缓存管理（版本化 + 分块 + 合并/校验 + 语义字段）
     5. 哈希提取（双哈希融合 + 32x32预处理 + FFmpeg兜底 + 音频哈希）
     6. 视频相似度比对（时长预筛 + LSH分桶 + double-check）
     7. 连通图分组（多维度保留策略）
     8. 结果导出（CSV/TXT/MD/HTML/纯路径清单/审计日志/安全清理脚本）
     9. 全局异常处理与主入口
+    10. AI 语义分析模块（CLIP特征提取 + 场景分类 + 用途判定）
+    11. 语义聚类与数据集导出
 
 使用示例：
-    # 子命令模式（v2.1 推荐）
+    # 子命令模式（v2.2 推荐）
     python find_mp4.py scan --dir D:\\Videos
-    python find_mp4.py scan --dir D:\\Videos --fast
-    python find_mp4.py scan --dir D:\\Videos --format html --min-sim 0.85
-    python find_mp4.py scan --dir D:\\Videos --keep-latest --gen-cleanup
-    python find_mp4.py scan --dir D:\\Videos --incremental
+    python find_mp4.py scan --dir D:\\Videos --semantic --export-dataset
+    python find_mp4.py semantic-analyze --dir D:\\video
+    python find_mp4.py dataset-filter --purpose 监控 --dir D:\\car_data
+    python find_mp4.py scan --dir D:\\camera --cluster-semantic
+    python find_mp4.py scan --dir D:\\video --semantic --incremental --embed-cache
     python find_mp4.py clean-cache
-    python find_mp4.py merge-cache f1.json,f2.json
     python find_mp4.py verify-cache
 
-    # 扁平参数模式（v2.0 兼容）
+    # 扁平参数模式（v2.1 兼容）
     python find_mp4.py --dir D:\\Videos
     python find_mp4.py --version
 """
@@ -70,6 +73,29 @@ try:
 except ImportError:
     PSUTIL_AVAILABLE = False
 
+# ai_semantic 模块（v2.2 AI 语义分析，可选）
+try:
+    from ai_semantic import (
+        TORCH_OK as _AI_TORCH_OK,
+        CLIP_OK as _AI_CLIP_OK,
+        SKLEARN_OK as _AI_SKLEARN_OK,
+        CUDA_OK as _AI_CUDA_OK,
+        load_clip_model,
+        semantic_analyze_video,
+        cluster_videos_by_semantic,
+        export_dataset_catalog,
+        export_train_sample_list,
+        export_dataset_stats,
+        export_scene_cluster_html,
+    )
+    AI_MODULE_AVAILABLE = True
+except ImportError:
+    AI_MODULE_AVAILABLE = False
+    _AI_TORCH_OK = False
+    _AI_CLIP_OK = False
+    _AI_SKLEARN_OK = False
+    _AI_CUDA_OK = False
+
 # FFmpeg 探测
 FFMPEG_AVAILABLE = bool(shutil.which("ffmpeg"))
 
@@ -77,10 +103,10 @@ FFMPEG_AVAILABLE = bool(shutil.which("ffmpeg"))
 # ============================================================
 # 模块 0：全局配置常量 + 退出码
 # ============================================================
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 # 缓存版本号（算法变更时自动作废旧缓存）
-CACHE_VERSION = "2.1"
+CACHE_VERSION = "2.2"
 
 # 基础参数
 HASH_SIZE = 8
@@ -104,6 +130,13 @@ CLEANUP_SCRIPT_LINUX = "cleanup_duplicates.sh"
 LOG_FILE = "run_log.txt"
 IGNORE_FILE = ".duplicateignore"
 
+# v2.2 AI 相关输出文件
+SEMANTIC_META = "video_semantic_meta.json"
+DATASET_CATALOG = "dataset_catalog.csv"
+TRAIN_SAMPLE_LIST = "train_sample_list.txt"
+DATASET_STATS = "dataset_stats.md"
+SCENE_CLUSTER_HTML = "scene_cluster.html"
+
 # 错误类型
 ERR_READ_FAILED = "read_failed"
 ERR_ZERO_FRAMES = "zero_frames"
@@ -112,6 +145,7 @@ ERR_DECODE_ERROR = "decode_error"
 ERR_ENCRYPTED = "encrypted"
 ERR_PERMISSION = "permission"
 ERR_DISK_ERROR = "disk_error"
+ERR_LOW_QUALITY = "low_quality"  # v2.2 新增：画面模糊/暗光无有效主体
 
 # 退出码
 EXIT_OK = 0            # 无重复
@@ -119,11 +153,17 @@ EXIT_HAS_DUPLICATES = 1  # 存在重复分组
 EXIT_PARSE_ERROR = 2    # 视频解析失败
 EXIT_BAD_ARGS = 3      # 参数错误
 
+# CLIP 模型全局引用（延迟加载，v2.2）
+_semantic_clip_model = None
+_semantic_clip_preprocess = None
+_semantic_clip_device = "cuda" if _AI_CUDA_OK else "cpu"
+
 # 全局状态
 _global_cache = {}
 _global_exit_code = EXIT_OK
 _global_results_saved = False
 _quiet_mode = False
+_semantic_stats = {}   # v2.2 新增：AI 语义统计
 
 
 # ============================================================
@@ -239,6 +279,25 @@ def _build_shared_parser():
                         help="合并多个缓存文件")
     parser.add_argument("--verify-cache", action="store_true", default=False,
                         help="校验缓存有效性")
+    # v2.2 AI 语义分析参数
+    parser.add_argument("--semantic", action="store_true", default=False,
+                        help="开启AI视频内容语义分析")
+    parser.add_argument("--purpose-filter", type=str, default="",
+                        help="仅保留指定用途的视频，逗号分隔（监控,自动驾驶...）")
+    parser.add_argument("--cluster-semantic", action="store_true", default=False,
+                        help="基于画面内容聚类相似视频")
+    parser.add_argument("--export-dataset", action="store_true", default=False,
+                        help="导出AI训练集目录清单、标注文件")
+    parser.add_argument("--scene-thresh", type=float, default=0.6,
+                        help="场景标签置信度阈值，默认 0.6")
+    parser.add_argument("--embed-cache", action="store_true", default=False,
+                        help="持久化CLIP特征向量到缓存")
+    parser.add_argument("--no-semantic-cache", action="store_true", default=False,
+                        help="关闭语义特征缓存")
+    parser.add_argument("--semantic-workers", type=int, default=1,
+                        help="AI推理线程数，默认 1")
+    parser.add_argument("--purpose", type=str, default="",
+                        help="数据集用途筛选（dataset-filter子命令专用）")
     return parser
 
 
@@ -247,7 +306,8 @@ def parse_args():
     shared = _build_shared_parser()
 
     # 检查第一个有效参数是否为子命令
-    subcommands = {"scan", "clean-cache", "merge-cache", "verify-cache", "version", "help"}
+    subcommands = {"scan", "clean-cache", "merge-cache", "verify-cache", "version", "help",
+                   "semantic-analyze", "dataset-filter", "cluster-scene"}
 
     # 提取第一个非flag参数来判断模式
     first_arg = None
@@ -261,7 +321,7 @@ def parse_args():
     if not is_subcommand:
         # 扁平参数模式（v2.0 兼容）
         parser = argparse.ArgumentParser(
-            description="MP4 视频相似度查重工具 v2.1",
+            description="MP4 视频相似度查重工具 v2.2",
             parents=[shared],
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
@@ -278,7 +338,7 @@ def parse_args():
 
     # 子命令模式
     parser = argparse.ArgumentParser(
-        description=f"MP4 视频查重工具 - {first_arg}",
+        description=f"MP4 视频查重工具 v2.2 - {first_arg}",
         parents=[shared],
     )
     parser.add_argument("command", nargs="?", default=first_arg)
@@ -286,6 +346,9 @@ def parse_args():
     if first_arg == "merge-cache":
         parser.add_argument("cache_files", nargs="+",
                             help="要合并的缓存文件路径")
+    elif first_arg == "dataset-filter":
+        parser.add_argument("purpose", nargs="?", default="",
+                            help="数据集用途筛选，如 监控、自动驾驶")
 
     args = parser.parse_args()
     args.command = first_arg
@@ -309,6 +372,10 @@ def load_config_file(config_path: str, args):
         "fast": "fast", "incremental": "incremental",
         "keep_latest": "keep-latest", "keep_max_res": "keep-max-res",
         "keep_max_bitrate": "keep-max-bitrate",
+        "semantic": "semantic", "purpose_filter": "purpose-filter",
+        "cluster_semantic": "cluster-semantic", "export_dataset": "export-dataset",
+        "scene_thresh": "scene-thresh", "embed_cache": "embed-cache",
+        "quiet": "quiet", "dry_run": "dry-run",
     }
     for config_key, arg_key in mapping.items():
         if config_key in sec:
@@ -353,6 +420,16 @@ def validate_args(args):
     workers = getattr(args, "workers", 0)
     if workers < 0:
         print("错误: --workers 必须 >= 0")
+        sys.exit(EXIT_BAD_ARGS)
+
+    scene_thresh = getattr(args, "scene_thresh", 0.6)
+    if scene_thresh < 0.0 or scene_thresh > 1.0:
+        print("错误: --scene-thresh 必须在 0.0 ~ 1.0 之间")
+        sys.exit(EXIT_BAD_ARGS)
+
+    semantic_cmd = cmd in ("semantic-analyze", "dataset-filter", "cluster-scene")
+    if semantic_cmd and not AI_MODULE_AVAILABLE:
+        print("错误: AI 子命令需要 ai_semantic 模块，请安装 torch/open-clip/sklearn")
         sys.exit(EXIT_BAD_ARGS)
 
 
@@ -1212,26 +1289,38 @@ def _select_retain(
 # ============================================================
 # 模块 8：结果导出
 # ============================================================
-def export_csv(similar_pairs: list[dict], csv_path: str, threshold: float):
-    """导出比对明细 CSV"""
+def export_csv(similar_pairs: list[dict], csv_path: str, threshold: float, semantic_data: dict = None):
+    """导出比对明细 CSV（v2.2 扩展语义标签列）"""
     try:
         with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["视频A路径", "视频B路径", "归一化距离", "相似度", "是否判定重复"])
+            header = ["视频A路径", "视频B路径", "归一化距离", "相似度", "是否判定重复"]
+            if semantic_data:
+                header.extend(["A场景标签", "A数据集用途", "B场景标签", "B数据集用途"])
+            writer.writerow(header)
             for pair in similar_pairs:
                 is_dup = "是" if pair["similarity"] >= threshold else "否"
-                writer.writerow([
+                row = [
                     pair["path_a"], pair["path_b"],
                     f"{pair['distance']:.6f}", f"{pair['similarity']:.4f}", is_dup,
-                ])
+                ]
+                if semantic_data:
+                    sd_a = semantic_data.get(pair["path_a"], {})
+                    sd_b = semantic_data.get(pair["path_b"], {})
+                    scene_a = ", ".join(sd_a.get("scene_tags", [])[:3]) or "-"
+                    purpose_a = sd_a.get("dataset_purpose", "-") or "-"
+                    scene_b = ", ".join(sd_b.get("scene_tags", [])[:3]) or "-"
+                    purpose_b = sd_b.get("dataset_purpose", "-") or "-"
+                    row.extend([scene_a, purpose_a, scene_b, purpose_b])
+                writer.writerow(row)
         log(f"[导出] CSV → {csv_path}")
     except (IOError, OSError) as e:
         log(f"[错误] CSV 导出失败: {e}")
 
 
 def export_groups_txt(groups: list[dict], mp4_files: list[dict], group_path: str,
-                      threshold: float, min_sim: float = 0.0):
-    """导出分组报告 TXT"""
+                      threshold: float, min_sim: float = 0.0, semantic_data: dict = None):
+    """导出分组报告 TXT（v2.2 扩展语义标签）"""
     try:
         filtered = []
         for g in groups:
@@ -1253,13 +1342,37 @@ def export_groups_txt(groups: list[dict], mp4_files: list[dict], group_path: str
                 for gi, group in enumerate(filtered, 1):
                     f.write(f"【第 {gi} 组】（共 {len(group['members'])} 个视频）\n")
                     f.write("-" * 50 + "\n")
+                    # 统计该组的数据集用途
+                    if semantic_data:
+                        purposes = []
+                        for idx, info in group["members"]:
+                            sd = semantic_data.get(info["path"], {})
+                            p = sd.get("dataset_purpose", "")
+                            if p:
+                                purposes.append(p)
+                        if purposes:
+                            from collections import Counter
+                            pc = Counter(purposes)
+                            f.write(f"  内容归类: {dict(pc)}\n")
                     for fi, (idx, info) in enumerate(group["members"]):
                         mark = " ★ 建议保留" if idx == group["retain_idx"] else " ✗ 建议清理"
                         f.write(f"  {fi + 1}. {info['name']}{mark}\n")
                         f.write(f"     路径: {info['path']}\n")
                         f.write(f"     大小: {info['size_readable']}\n")
                         mtime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(info["mtime"]))
-                        f.write(f"     修改时间: {mtime}\n\n")
+                        f.write(f"     修改时间: {mtime}\n")
+                        # v2.2 语义标签
+                        if semantic_data:
+                            sd = semantic_data.get(info["path"], {})
+                            if sd.get("scene_tags"):
+                                f.write(f"     场景: {', '.join(sd['scene_tags'][:3])}\n")
+                            if sd.get("dataset_purpose"):
+                                f.write(f"     用途: {sd['dataset_purpose']}\n")
+                            if sd.get("quality_score", 0) > 0:
+                                qs = sd["quality_score"]
+                                quality_label = "✓适合训练" if sd.get("is_training_ready") else "✗质量不足"
+                                f.write(f"     质量: {qs:.2f} ({quality_label})\n")
+                        f.write("\n")
                     f.write("-" * 50 + "\n\n")
         log(f"[导出] 分组报告(TXT) → {group_path}")
     except (IOError, OSError) as e:
@@ -1267,8 +1380,8 @@ def export_groups_txt(groups: list[dict], mp4_files: list[dict], group_path: str
 
 
 def export_groups_md(groups: list[dict], mp4_files: list[dict], md_path: str,
-                      threshold: float, min_sim: float = 0.0):
-    """导出分组报告 Markdown"""
+                      threshold: float, min_sim: float = 0.0, semantic_data: dict = None):
+    """导出分组报告 Markdown（v2.2 扩展语义标签）"""
     try:
         filtered = []
         for g in groups:
@@ -1294,12 +1407,36 @@ def export_groups_md(groups: list[dict], mp4_files: list[dict], md_path: str,
             else:
                 for gi, group in enumerate(filtered, 1):
                     f.write(f"## 第 {gi} 组（{len(group['members'])} 个视频）\n\n")
-                    f.write("| # | 文件名 | 大小 | 修改时间 | 建议 |\n")
-                    f.write("|---|--------|------|----------|------|\n")
+                    # v2.2 内容归类统计
+                    if semantic_data:
+                        purposes = []
+                        for idx, info in group["members"]:
+                            sd = semantic_data.get(info["path"], {})
+                            p = sd.get("dataset_purpose", "")
+                            if p:
+                                purposes.append(p)
+                        if purposes:
+                            from collections import Counter
+                            pc = Counter(purposes)
+                            f.write(f"> 内容归类: {dict(pc)}\n\n")
+                    f.write("| # | 文件名 | 大小 | 修改时间 | 建议 |")
+                    if semantic_data:
+                        f.write(" 场景 | 用途 |")
+                    f.write("\n")
+                    f.write("|---|--------|------|----------|------|")
+                    if semantic_data:
+                        f.write("------|------|")
+                    f.write("\n")
                     for fi, (idx, info) in enumerate(group["members"]):
                         mark = "✅ 保留" if idx == group["retain_idx"] else "❌ 清理"
                         mtime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(info["mtime"]))
-                        f.write(f"| {fi + 1} | `{info['name']}` | {info['size_readable']} | {mtime} | {mark} |\n")
+                        line = f"| {fi + 1} | `{info['name']}` | {info['size_readable']} | {mtime} | {mark} |"
+                        if semantic_data:
+                            sd = semantic_data.get(info["path"], {})
+                            scene = ", ".join(sd.get("scene_tags", [])[:2]) or "-"
+                            purpose = sd.get("dataset_purpose", "-") or "-"
+                            line += f" {scene} | {purpose} |"
+                        f.write(line + "\n")
                     f.write("\n")
         log(f"[导出] 分组报告(MD) → {md_path}")
     except (IOError, OSError) as e:
@@ -1307,8 +1444,8 @@ def export_groups_md(groups: list[dict], mp4_files: list[dict], md_path: str,
 
 
 def export_groups_html(groups: list[dict], mp4_files: list[dict], html_path: str,
-                        threshold: float, min_sim: float = 0.0):
-    """导出 HTML 可视化报告"""
+                        threshold: float, min_sim: float = 0.0, semantic_data: dict = None):
+    """导出 HTML 可视化报告（v2.2 扩展语义标签）"""
     try:
         filtered = []
         for g in groups:
@@ -1321,6 +1458,13 @@ def export_groups_html(groups: list[dict], mp4_files: list[dict], html_path: str
             for idx, info in g["members"]:
                 if idx != g["retain_idx"]:
                     total_savable += info["size"]
+
+        # v2.2 语义统计
+        semantic_summary = {}
+        if semantic_data:
+            for path, sd in semantic_data.items():
+                p = sd.get("dataset_purpose", "未分类")
+                semantic_summary[p] = semantic_summary.get(p, 0) + 1
 
         html_parts = [
             "<!DOCTYPE html>\n<html lang='zh-CN'>\n<head>\n",
@@ -1339,6 +1483,8 @@ def export_groups_html(groups: list[dict], mp4_files: list[dict], html_path: str
             ".stats{background:#fff;padding:15px;border-radius:8px;margin:15px 0}",
             ".summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}",
             ".summary div{background:#f8f8f8;padding:10px;border-radius:4px;text-align:center}",
+            ".semantic-tag{background:#2196F3;color:#white;padding:2px 6px;border-radius:3px;font-size:11px;margin-left:5px}",
+            ".purpose-tag{background:#FF9800;color:white;padding:2px 6px;border-radius:3px;font-size:11px;margin-left:5px}",
             "</style>\n</head>\n<body>\n",
             f"<h1>MP4 相似视频分组报告</h1>\n",
             f"<div class='stats'><div class='summary'>",
@@ -1349,16 +1495,35 @@ def export_groups_html(groups: list[dict], mp4_files: list[dict], html_path: str
             f"</div></div>\n",
         ]
 
+        # v2.2 语义统计面板
+        if semantic_summary:
+            html_parts.append("<div class='stats'><h3>📊 AI 语义统计</h3>")
+            html_parts.append("<div class='summary'>")
+            for purpose, count in sorted(semantic_summary.items(), key=lambda x: -x[1]):
+                html_parts.append(f"<div><h3>{count}</h3><p>{purpose}</p></div>")
+            html_parts.append("</div></div>\n")
+
         for gi, group in enumerate(filtered, 1):
             html_parts.append(f"<div class='group'><h2>第 {gi} 组</h2>\n")
             for fi, (idx, info) in enumerate(group["members"]):
                 mark = "retain" if idx == group["retain_idx"] else "clean"
                 text = "保留" if idx == group["retain_idx"] else "清理"
+                extra_tags = ""
+                if semantic_data:
+                    sd = semantic_data.get(info["path"], {})
+                    if sd.get("scene_tags"):
+                        extra_tags += "".join(
+                            f"<span class='semantic-tag'>{t}</span>"
+                            for t in sd["scene_tags"][:2]
+                        )
+                    if sd.get("dataset_purpose"):
+                        extra_tags += f"<span class='purpose-tag'>{sd['dataset_purpose']}</span>"
                 html_parts.append(
                     f"<div class='video'>"
                     f"<span>{fi + 1}. <b>{info['name']}</b></span>"
                     f"<span style='margin-left:auto'>{info['size_readable']}</span>"
                     f"<span class='badge {mark}'>{text}</span>"
+                    f"{extra_tags}"
                     f"</div>\n"
                 )
             html_parts.append("</div>\n")
@@ -1547,8 +1712,8 @@ def generate_cleanup_script(
     log(f"[导出] 清理脚本 → {bat_path} / {sh_path}")
 
 
-def export_audit_log(output_dir: str, groups: list[dict], mp4_files: list[dict], hard_delete: bool):
-    """导出清理操作审计日志"""
+def export_audit_log(output_dir: str, groups: list[dict], mp4_files: list[dict], hard_delete: bool, semantic_data: dict = None):
+    """导出清理操作审计日志（v2.2 扩展语义备注）"""
     try:
         audit_path = os.path.join(output_dir, AUDIT_LOG)
         with open(audit_path, "a", encoding="utf-8") as f:
@@ -1558,10 +1723,21 @@ def export_audit_log(output_dir: str, groups: list[dict], mp4_files: list[dict],
             f.write(f"分组数: {len(groups)}\n")
             for gi, group in enumerate(groups, 1):
                 f.write(f"\n第{gi}组:\n")
-                f.write(f"  保留: {mp4_files[group['retain_idx']]['path']}\n")
+                retain_info = mp4_files[group['retain_idx']]
+                f.write(f"  保留: {retain_info['path']}")
+                if semantic_data:
+                    sd = semantic_data.get(retain_info["path"], {})
+                    if sd.get("dataset_purpose"):
+                        f.write(f" ({sd['dataset_purpose']})")
+                f.write("\n")
                 for idx, info in group["members"]:
                     if idx != group["retain_idx"]:
-                        f.write(f"  清理: {info['path']} ({info['size_readable']})\n")
+                        f.write(f"  清理: {info['path']} ({info['size_readable']})")
+                        if semantic_data:
+                            sd = semantic_data.get(info["path"], {})
+                            if sd.get("dataset_purpose"):
+                                f.write(f" [{sd['dataset_purpose']}]")
+                        f.write("\n")
         log(f"[导出] 审计日志 → {audit_path}")
     except (IOError, OSError):
         pass
@@ -1572,8 +1748,9 @@ def print_summary(
     video_hashes: dict,
     bad_videos: list[dict],
     groups: list[dict],
+    semantic_results: dict = None,
 ):
-    """打印统计汇总"""
+    """打印统计汇总（v2.2 扩展语义统计）"""
     total = len(mp4_files)
     success = len(video_hashes)
     failed = len(bad_videos)
@@ -1592,6 +1769,32 @@ def print_summary(
     mem = _get_memory_usage()
     if mem:
         log(f"  峰值内存占用:     {mem}", force=True)
+
+    # v2.2 AI 语义统计
+    if semantic_results:
+        log("", force=True)
+        log("  📊 AI 语义分析统计:", force=True)
+        total_analyzed = len(semantic_results)
+        log(f"    已分析视频:     {total_analyzed}", force=True)
+        from collections import Counter
+        purpose_counts = Counter()
+        scene_counts = Counter()
+        train_ready = 0
+        for idx, sd in semantic_results.items():
+            p = sd.get("dataset_purpose", "未分类")
+            purpose_counts[p] += 1
+            for s in sd.get("scene_tags", [])[:2]:
+                scene_counts[s] += 1
+            if sd.get("is_training_ready"):
+                train_ready += 1
+        for purpose, count in purpose_counts.most_common():
+            log(f"    {purpose}: {count} 个", force=True)
+        if scene_counts:
+            log("    高频场景:", force=True)
+            for scene, count in scene_counts.most_common(5):
+                log(f"      {scene}: {count} 个", force=True)
+        log(f"    适合训练:       {train_ready} 个", force=True)
+
     log("=" * 60, force=True)
 
     if bad_videos:
@@ -1603,6 +1806,7 @@ def print_summary(
             ERR_DECODE_ERROR: "解码异常",
             ERR_PERMISSION: "权限不足",
             ERR_DISK_ERROR: "磁盘读取错误",
+            ERR_LOW_QUALITY: "画面质量低",
         }
         for bv in bad_videos:
             label = error_labels.get(bv["error_type"], bv["error_type"])
@@ -1666,6 +1870,12 @@ def _print_version():
     log(f"psutil: {'已安装' if PSUTIL_AVAILABLE else '未安装（可选）'}", force=True)
     log(f"FFmpeg: {'已安装' if FFMPEG_AVAILABLE else '未安装（可选）'}", force=True)
     log(f"缓存版本: {CACHE_VERSION}", force=True)
+    log(f"AI 模块: {'已加载' if AI_MODULE_AVAILABLE else '未安装'}", force=True)
+    if AI_MODULE_AVAILABLE:
+        log(f"  PyTorch: {'已安装' if _AI_TORCH_OK else '未安装'}", force=True)
+        log(f"  CLIP: {'已安装' if _AI_CLIP_OK else '未安装'}", force=True)
+        log(f"  sklearn: {'已安装' if _AI_SKLEARN_OK else '未安装'}", force=True)
+        log(f"  CUDA: {'可用' if _AI_CUDA_OK else '不可用'}", force=True)
 
 
 def _get_keep_strategy(args) -> str:
@@ -1687,6 +1897,352 @@ def _auto_workers(args) -> int:
     if workers <= 0:
         return auto
     return min(auto, workers)
+
+
+# ============================================================
+# v2.2 AI 辅助函数
+# ============================================================
+def _ensure_clip_model():
+    """确保 CLIP 模型已加载"""
+    global _semantic_clip_model, _semantic_clip_preprocess, _semantic_clip_device
+    if _semantic_clip_model is not None:
+        return _semantic_clip_model, _semantic_clip_preprocess, _semantic_clip_device
+    if not AI_MODULE_AVAILABLE:
+        log("[AI] ai_semantic 模块未加载", force=True)
+        return None, None, None
+    if not _AI_TORCH_OK or not _AI_CLIP_OK:
+        log("[AI] PyTorch/CLIP 未安装，AI 功能不可用", force=True)
+        return None, None, None
+    try:
+        model, preprocess, device = load_clip_model()
+        _semantic_clip_model = model
+        _semantic_clip_preprocess = preprocess
+        _semantic_clip_device = device
+        return model, preprocess, device
+    except Exception as e:
+        log(f"[AI] CLIP 模型加载失败: {e}", force=True)
+        return None, None, None
+
+
+def _run_semantic_analysis(
+    mp4_files: list[dict], cache_path: str,
+    model, preprocess, device, args,
+) -> dict:
+    """对所有视频执行语义分析，返回 {path: semantic_data}"""
+    global _semantic_stats
+    scene_thresh = getattr(args, "scene_thresh", 0.6)
+    embed = getattr(args, "embed_cache", False) and not getattr(args, "no_semantic_cache", False)
+    semantic_results = {}
+    use_cache = not getattr(args, "no_cache", False) and embed
+
+    # 尝试从缓存加载已有语义数据
+    cache = load_cache(cache_path) if use_cache else {"_version": CACHE_VERSION}
+    to_analyze = []
+
+    for i, file_info in enumerate(mp4_files):
+        path = file_info["path"]
+        if use_cache and path in cache and cache[path].get("scene_tags"):
+            entry = cache[path]
+            semantic_results[i] = {
+                "scene_tags": entry.get("scene_tags", []),
+                "object_tags": entry.get("object_tags", []),
+                "action_tags": entry.get("action_tags", []),
+                "dataset_purpose": entry.get("dataset_purpose", ""),
+                "semantic_conf": entry.get("semantic_conf", {}),
+                "quality_score": entry.get("quality_score", 0.0),
+                "is_training_ready": entry.get("is_training_ready", False),
+            }
+            continue
+        to_analyze.append((i, file_info))
+
+    if not to_analyze:
+        log("  AI 语义分析: 全部缓存命中，无需重新计算")
+        return semantic_results
+
+    log(f"  AI 语义分析: {len(to_analyze)} 个视频待分析...")
+    total = len(to_analyze)
+    completed = 0
+
+    if TQDM_AVAILABLE:
+        pbar = _tqdm(total=total, desc="AI语义分析", unit="视频", ncols=80)
+
+    for idx, file_info in to_analyze:
+        path = file_info["path"]
+        try:
+            result = semantic_analyze_video(
+                path, model, preprocess, device,
+                num_frames=10, scene_thresh=scene_thresh,
+            )
+            if result:
+                semantic_results[idx] = result
+                if embed:
+                    cache[path] = cache.get(path, {})
+                    cache[path].update({
+                        "scene_tags": result.get("scene_tags", []),
+                        "object_tags": result.get("object_tags", []),
+                        "action_tags": result.get("action_tags", []),
+                        "dataset_purpose": result.get("dataset_purpose", ""),
+                        "semantic_conf": result.get("semantic_conf", {}),
+                        "quality_score": result.get("quality_score", 0.0),
+                        "is_training_ready": result.get("is_training_ready", False),
+                    })
+            else:
+                semantic_results[idx] = {"scene_tags": [], "object_tags": [],
+                                          "action_tags": [], "dataset_purpose": "",
+                                          "semantic_conf": {}, "quality_score": 0.0,
+                                          "is_training_ready": False}
+        except Exception as e:
+            log(f"  [警告] AI 分析失败: {path} - {e}")
+            semantic_results[idx] = {"scene_tags": [], "object_tags": [],
+                                      "action_tags": [], "dataset_purpose": "",
+                                      "semantic_conf": {}, "quality_score": 0.0,
+                                      "is_training_ready": False}
+
+        completed += 1
+        if TQDM_AVAILABLE:
+            pbar.update(1)
+        else:
+            pct = completed / total * 100
+            log(f"  AI进度: {completed}/{total} ({pct:.0f}%)", "\r")
+
+        if use_cache and completed % 5 == 0:
+            save_cache(cache_path, cache)
+
+    if TQDM_AVAILABLE:
+        pbar.close()
+    log("")
+
+    if use_cache:
+        save_cache(cache_path, cache)
+
+    # 统计
+    _semantic_stats = {}
+    for idx, sd in semantic_results.items():
+        purpose = sd.get("dataset_purpose", "未分类")
+        _semantic_stats[purpose] = _semantic_stats.get(purpose, 0) + 1
+
+    log(f"  AI 分析完成: {len(semantic_results)} 个视频", force=True)
+    for purpose, count in sorted(_semantic_stats.items()):
+        log(f"    {purpose}: {count} 个", force=True)
+
+    return semantic_results
+
+
+def _run_semantic_analyze(args):
+    """执行纯语义分析子命令"""
+    global _quiet_mode
+    _quiet_mode = args.quiet
+    folder_path = _resolve_path(args.dir)
+    recursive = not args.no_recursive
+
+    if args.output_dir:
+        output_dir = _resolve_path(args.output_dir)
+    else:
+        output_dir = os.path.dirname(os.path.abspath(__file__))
+    os.makedirs(output_dir, exist_ok=True)
+
+    log_init(output_dir)
+    signal.signal(signal.SIGINT, _signal_handler)
+
+    if not AI_MODULE_AVAILABLE:
+        log("错误: ai_semantic 模块未加载，请先安装依赖", force=True)
+        sys.exit(EXIT_BAD_ARGS)
+
+    model, preprocess, device = _ensure_clip_model()
+    if model is None:
+        sys.exit(EXIT_BAD_ARGS)
+
+    log("=" * 60, force=True)
+    log("  MP4 视频 AI 语义分析", force=True)
+    log("=" * 60, force=True)
+    log(f"  扫描目录: {folder_path}", force=True)
+
+    mp4_files = scan_mp4_files(args)
+    if not mp4_files:
+        log("未找到视频文件", force=True)
+        return
+
+    log(f"  共 {len(mp4_files)} 个视频", force=True)
+
+    cache_path = os.path.join(output_dir, CACHE_FILE)
+    semantic_results = _run_semantic_analysis(
+        mp4_files, cache_path, model, preprocess, device, args,
+    )
+
+    # 导出
+    _export_semantic_results(mp4_files, semantic_results, output_dir, args)
+
+    log(f"\n完成！结果已保存至: {output_dir}", force=True)
+
+
+def _run_dataset_filter(args):
+    """数据集筛选子命令"""
+    global _quiet_mode
+    _quiet_mode = args.quiet
+    folder_path = _resolve_path(args.dir)
+    recursive = not args.no_recursive
+    purpose_filter = args.purpose or getattr(args, "purpose_filter", "")
+
+    if args.output_dir:
+        output_dir = _resolve_path(args.output_dir)
+    else:
+        output_dir = os.path.dirname(os.path.abspath(__file__))
+    os.makedirs(output_dir, exist_ok=True)
+
+    log_init(output_dir)
+    signal.signal(signal.SIGINT, _signal_handler)
+
+    if not AI_MODULE_AVAILABLE:
+        log("错误: ai_semantic 模块未加载", force=True)
+        sys.exit(EXIT_BAD_ARGS)
+
+    model, preprocess, device = _ensure_clip_model()
+    if model is None:
+        sys.exit(EXIT_BAD_ARGS)
+
+    log("=" * 60, force=True)
+    log(f"  数据集筛选 (用途: {purpose_filter or '全部'})", force=True)
+    log("=" * 60, force=True)
+
+    mp4_files = scan_mp4_files(args)
+    if not mp4_files:
+        log("未找到视频文件", force=True)
+        return
+
+    log(f"  共 {len(mp4_files)} 个视频", force=True)
+
+    cache_path = os.path.join(output_dir, CACHE_FILE)
+    semantic_results = _run_semantic_analysis(
+        mp4_files, cache_path, model, preprocess, device, args,
+    )
+
+    # 按用途筛选
+    if purpose_filter:
+        purposes = [p.strip() for p in purpose_filter.split(",") if p.strip()]
+        filtered = {i: sd for i, sd in semantic_results.items()
+                    if sd.get("dataset_purpose", "") in purposes}
+        log(f"  筛选后: {len(filtered)} 个视频符合条件", force=True)
+    else:
+        filtered = semantic_results
+
+    # 导出
+    _export_semantic_results(mp4_files, filtered, output_dir, args,
+                              purpose_filter=purpose_filter)
+    log(f"\n完成！结果已保存至: {output_dir}", force=True)
+
+
+def _run_cluster_scene(args):
+    """场景聚类子命令"""
+    global _quiet_mode
+    _quiet_mode = args.quiet
+    folder_path = _resolve_path(args.dir)
+    recursive = not args.no_recursive
+
+    if args.output_dir:
+        output_dir = _resolve_path(args.output_dir)
+    else:
+        output_dir = os.path.dirname(os.path.abspath(__file__))
+    os.makedirs(output_dir, exist_ok=True)
+
+    log_init(output_dir)
+    signal.signal(signal.SIGINT, _signal_handler)
+
+    if not AI_MODULE_AVAILABLE:
+        log("错误: ai_semantic 模块未加载", force=True)
+        sys.exit(EXIT_BAD_ARGS)
+    if not _AI_SKLEARN_OK:
+        log("错误: scikit-learn 未安装，聚类功能不可用", force=True)
+        sys.exit(EXIT_BAD_ARGS)
+
+    model, preprocess, device = _ensure_clip_model()
+    if model is None:
+        sys.exit(EXIT_BAD_ARGS)
+
+    log("=" * 60, force=True)
+    log("  视频场景聚类", force=True)
+    log("=" * 60, force=True)
+
+    mp4_files = scan_mp4_files(args)
+    if not mp4_files:
+        log("未找到视频文件", force=True)
+        return
+
+    log(f"  共 {len(mp4_files)} 个视频", force=True)
+
+    cache_path = os.path.join(output_dir, CACHE_FILE)
+    semantic_results = _run_semantic_analysis(
+        mp4_files, cache_path, model, preprocess, device, args,
+    )
+
+    # 聚类
+    embeddings = []
+    idx_to_path = {}
+    for i, sd in semantic_results.items():
+        emb = sd.get("semantic_emb")
+        if emb is not None:
+            embeddings.append(emb)
+            idx_to_path[len(embeddings) - 1] = mp4_files[i]["path"]
+
+    if len(embeddings) < 2:
+        log("有效视频特征不足 2 个，无法聚类", force=True)
+        return
+
+    embeddings_array = np.array(embeddings)
+    clusters = cluster_videos_by_semantic(embeddings_array)
+
+    # 构建语义数据索引
+    semantic_data = {}
+    for i, sd in semantic_results.items():
+        semantic_data[mp4_files[i]["path"]] = sd
+
+    # 导出聚类结果
+    html_path = os.path.join(output_dir, SCENE_CLUSTER_HTML)
+    export_scene_cluster_html(clusters, semantic_data, html_path)
+
+    log(f"\n聚类完成！结果已保存至: {output_dir}", force=True)
+
+
+def _export_semantic_results(
+    mp4_files: list[dict], semantic_results: dict,
+    output_dir: str, args, purpose_filter: str = "",
+):
+    """导出语义分析结果"""
+    if not semantic_results:
+        return
+
+    # 构建语义数据索引
+    semantic_data = {}
+    for i, sd in semantic_results.items():
+        if i < len(mp4_files):
+            semantic_data[mp4_files[i]["path"]] = sd
+
+    # 导出数据集目录
+    catalog_path = os.path.join(output_dir, DATASET_CATALOG)
+    export_dataset_catalog(semantic_data, catalog_path)
+
+    # 导出训练样本清单
+    list_path = os.path.join(output_dir, TRAIN_SAMPLE_LIST)
+    purpose_list = [p.strip() for p in purpose_filter.split(",")] if purpose_filter else None
+    export_train_sample_list(semantic_data, list_path, purpose_filter=purpose_list)
+
+    # 导出统计
+    stats_path = os.path.join(output_dir, DATASET_STATS)
+    export_dataset_stats(semantic_data, stats_path)
+
+    # 可视化 HTML
+    if getattr(args, "format", "txt") == "html":
+        html_path = os.path.join(output_dir, SCENE_CLUSTER_HTML)
+        if _AI_SKLEARN_OK and len(semantic_data) >= 2:
+            embeddings = []
+            idx_to_path = {}
+            for i, sd in semantic_results.items():
+                emb = sd.get("semantic_emb")
+                if emb is not None and i < len(mp4_files):
+                    embeddings.append(emb)
+                    idx_to_path[len(embeddings) - 1] = mp4_files[i]["path"]
+            if len(embeddings) >= 2:
+                clusters = cluster_videos_by_semantic(np.array(embeddings))
+                export_scene_cluster_html(clusters, semantic_data, html_path)
 
 
 def main():
@@ -1738,6 +2294,22 @@ def main():
         log(f"  已清理 {removed} 条无效缓存，剩余 {remaining} 条", force=True)
         return
 
+    # ============ v2.2 AI 子命令 ============
+    # --semantic-analyze
+    if cmd == "semantic-analyze":
+        _run_semantic_analyze(args)
+        return
+
+    # --dataset-filter
+    if cmd == "dataset-filter":
+        _run_dataset_filter(args)
+        return
+
+    # --cluster-scene
+    if cmd == "cluster-scene":
+        _run_cluster_scene(args)
+        return
+
     # ============ 正常扫描模式 ============
     folder_path = _resolve_path(args.dir)
     recursive = not args.no_recursive
@@ -1768,7 +2340,7 @@ def main():
     keep_strategy = _get_keep_strategy(args)
 
     log("=" * 60, force=True)
-    log("       MP4 视频相似度查重工具 v2.1", force=True)
+    log("       MP4 视频相似度查重工具 v2.2", force=True)
     log("=" * 60, force=True)
     log(f"  扫描目录:   {folder_path}", force=True)
     log(f"  递归子目录: {'是' if recursive else '否'}", force=True)
@@ -1782,6 +2354,16 @@ def main():
         log("  快速模式:   已开启", force=True)
     if dry_run:
         log("  试运行:     已开启（不生成删除脚本）", force=True)
+    if AI_MODULE_AVAILABLE:
+        log(f"  AI语义:     {'是' if args.semantic else '否'}", force=True)
+        if args.semantic:
+            log(f"  AI设备:     {_semantic_clip_device}", force=True)
+        if args.cluster_semantic:
+            log("  语义聚类:   已开启", force=True)
+        if args.export_dataset:
+            log("  数据集导出: 已开启", force=True)
+    if args.purpose_filter:
+        log(f"  用途筛选:   {args.purpose_filter}", force=True)
     if TQDM_AVAILABLE:
         log("  进度条:     已启用 (tqdm)", force=True)
     if FFMPEG_AVAILABLE:
@@ -1811,6 +2393,35 @@ def main():
         video_hashes, bad_videos, cache = extract_hashes_with_cache(
             mp4_files, cache_path, num_frames, max_workers, args, use_cache,
         )
+
+        # 2.5 AI 语义分析（可选）
+        semantic_results = {}
+        if args.semantic and AI_MODULE_AVAILABLE:
+            log("\n[步骤2.5] AI 语义分析...", force=True)
+            model, preprocess, device = _ensure_clip_model()
+            if model is not None:
+                semantic_results = _run_semantic_analysis(
+                    mp4_files, cache_path, model, preprocess, device, args,
+                )
+
+                # 用途筛选
+                purpose_filter = args.purpose_filter
+                if purpose_filter and semantic_results:
+                    purposes = [p.strip() for p in purpose_filter.split(",") if p.strip()]
+                    filtered_indices = set()
+                    for i, sd in semantic_results.items():
+                        if sd.get("dataset_purpose", "") in purposes:
+                            filtered_indices.add(i)
+                    # 从 video_hashes 中过滤
+                    filtered_hashes = {}
+                    for idx, vh in video_hashes.items():
+                        if idx in filtered_indices:
+                            filtered_hashes[idx] = vh
+                    if len(filtered_hashes) < len(video_hashes):
+                        log(f"  用途筛选: {len(video_hashes)} → {len(filtered_hashes)} 个视频", force=True)
+                        video_hashes = filtered_hashes
+            else:
+                log("  [警告] CLIP 模型不可用，跳过语义分析", force=True)
 
         # 3. 快速预筛
         meta_dups = []
@@ -1853,23 +2464,30 @@ def main():
         log("\n[步骤5] 导出结果文件...", force=True)
         min_sim = getattr(args, "min_sim", 0.0)
 
+        # 构建语义数据索引
+        semantic_data = {}
+        if semantic_results:
+            for i, sd in semantic_results.items():
+                if i < len(mp4_files):
+                    semantic_data[mp4_files[i]["path"]] = sd
+
         if not dry_run:
             csv_path = os.path.join(output_dir, RESULT_CSV)
             group_path = os.path.join(output_dir, RESULT_GROUPS)
             bad_path = os.path.join(output_dir, BAD_VIDEO_LIST)
             paths_path = os.path.join(output_dir, RESULT_PATHS)
 
-            export_csv(similar_pairs, csv_path, threshold)
+            export_csv(similar_pairs, csv_path, threshold, semantic_data)
 
             fmt = args.format
             if fmt == "md":
                 md_path = os.path.join(output_dir, RESULT_GROUPS_MD)
-                export_groups_md(groups, mp4_files, md_path, threshold, min_sim)
+                export_groups_md(groups, mp4_files, md_path, threshold, min_sim, semantic_data)
             elif fmt == "html":
                 html_path = os.path.join(output_dir, RESULT_GROUPS_HTML)
-                export_groups_html(groups, mp4_files, html_path, threshold, min_sim)
+                export_groups_html(groups, mp4_files, html_path, threshold, min_sim, semantic_data)
             else:
-                export_groups_txt(groups, mp4_files, group_path, threshold, min_sim)
+                export_groups_txt(groups, mp4_files, group_path, threshold, min_sim, semantic_data)
 
             export_paths_list(groups, mp4_files, paths_path)
             export_bad_videos(bad_videos, bad_path)
@@ -1881,12 +2499,48 @@ def main():
             if args.gen_cleanup and groups:
                 protect = set(f.strip() for f in (args.protect_folder or "").split(",") if f.strip())
                 generate_cleanup_script(groups, mp4_files, output_dir, args.hard_delete, protect)
-                export_audit_log(output_dir, groups, mp4_files, args.hard_delete)
+                export_audit_log(output_dir, groups, mp4_files, args.hard_delete, semantic_data)
+
+            # v2.2 AI 数据集导出
+            if args.export_dataset and semantic_data:
+                log("\n[步骤5.5] 导出 AI 数据集文件...", force=True)
+                catalog_path = os.path.join(output_dir, DATASET_CATALOG)
+                export_dataset_catalog(semantic_data, catalog_path)
+
+                list_path = os.path.join(output_dir, TRAIN_SAMPLE_LIST)
+                purpose_list = [p.strip() for p in args.purpose_filter.split(",")] if args.purpose_filter else None
+                export_train_sample_list(semantic_data, list_path, purpose_filter=purpose_list)
+
+                stats_path = os.path.join(output_dir, DATASET_STATS)
+                export_dataset_stats(semantic_data, stats_path)
+
+            # v2.2 语义聚类导出
+            if args.cluster_semantic and semantic_data and _AI_SKLEARN_OK:
+                log("\n[步骤5.6] 语义聚类分析...", force=True)
+                embeddings = []
+                for i, sd in semantic_results.items():
+                    emb = sd.get("semantic_emb")
+                    if emb is not None:
+                        embeddings.append(emb)
+                if len(embeddings) >= 2:
+                    clusters = cluster_videos_by_semantic(np.array(embeddings))
+                    cluster_html = os.path.join(output_dir, SCENE_CLUSTER_HTML)
+                    export_scene_cluster_html(clusters, semantic_data, cluster_html)
+
+            # v2.2 语义元数据导出
+            if semantic_data:
+                meta_path = os.path.join(output_dir, SEMANTIC_META)
+                try:
+                    with open(meta_path, "w", encoding="utf-8") as f:
+                        json.dump(semantic_data, f, ensure_ascii=False, indent=2, default=str)
+                    log(f"[导出] 语义元数据 → {meta_path}", force=True)
+                except (IOError, OSError):
+                    pass
         else:
             log("  [试运行] 跳过文件写入", force=True)
 
         # 6. 汇总
-        print_summary(mp4_files, video_hashes, bad_videos, groups)
+        print_summary(mp4_files, video_hashes, bad_videos, groups, semantic_results)
 
         # 设置退出码
         if groups:
