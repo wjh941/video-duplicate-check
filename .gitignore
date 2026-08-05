@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# 缓存文件
+video_hash_cache.json
+video_hash_cache.json.bak
+
+# 导出报表
+similar_result.csv
+duplicate_groups.txt
+duplicate_groups.md
+bad_video_list.txt
+hash_export.json
+cleanup_duplicates.bat
+cleanup_duplicates.sh
+
+# 日志
+run_log.txt
+*.log
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 系统
+.DS_Store
+Thumbs.db
