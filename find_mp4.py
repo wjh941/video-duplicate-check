@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MP4 视频相似度查重工具 v2.4
+MP4 视频相似度查重工具 v2.5
 ==============================
 功能：扫描指定目录下的视频文件，基于多哈希融合（pHash+dHash）检测内容相似/重复的视频。
 支持 LSH 加速、增量扫描、缓存管理、多格式导出、安全清理、子命令架构。
 v2.2 新增：AI 语义内容分析、场景聚类、数据集自动标注、训练集清单导出。
 v2.4 新增：时长筛选统计、分辨率过滤、Excel导出、HTML缩略图预览、硬链接拆分、
           路径脱敏、缓存版本迁移、自定义权重配置、全局过滤规则、恢复脚本等。
+v2.5 新增：AI 自动分类（auto-classify 子命令）、AppContext 全局状态管理、
+          分类与时长/分辨率/低质筛选联动、dry-run 安全预览模式。
 
 模块结构：
-    0. 全局配置常量 + 退出码 + AI依赖检测
+    0. 全局配置常量 + 退出码 + AI依赖检测 + AppContext 上下文类
     1. 日志系统（双输出 + quiet 模式）
     2. 命令行参数解析（子命令 + 扁平参数兼容）
     3. 文件扫描与过滤（多后缀 + 排除规则 + .duplicateignore + .globalignore）
@@ -23,6 +25,29 @@ v2.4 新增：时长筛选统计、分辨率过滤、Excel导出、HTML缩略图
     10. AI 语义分析模块（CLIP特征提取 + 场景分类 + 用途判定）
     11. 语义聚类与数据集导出
     12. v2.4 时长筛选统计模块
+    13. v2.5 AI 自动分类模块（K-Means 聚类 + 自动命名 + 文件组织）
+
+================ v2.5 参数说明 ================
+
+【v2.5 新增 AI 自动分类参数】
+  auto-classify              AI 自动分类子命令（基于 CLIP 特征聚类）
+  --classify-only            仅执行 AI 自动分类，不查重（可替代 auto-classify 子命令）
+  --classify-method <方法>   分类算法（目前支持 kmeans）
+  --n-clusters <数量>        目标聚类数 (0=自动估算)
+  --execute                  执行文件操作（默认 dry-run 预览模式）
+  --link-mode                分类时使用硬链接（默认移动）
+
+【v2.5 新增 AI 自动分类示例】
+# AI 自动分类（默认 dry-run 预览模式，不修改文件）
+python find_mp4.py auto-classify --dir D:\\Videos
+# AI 自动分类并执行硬链接组织文件
+python find_mp4.py auto-classify --dir D:\\Videos --execute --link-mode
+# AI 自动分类 + 时长筛选联动
+python find_mp4.py auto-classify --dir D:\\Videos --duration-filter ">=60"
+# AI 自动分类 + 分辨率筛选 + 低质量过滤
+python find_mp4.py auto-classify --dir D:\\Videos --min-res 1920 --skip-low-quality
+# 仅分类（扁平参数模式）
+python find_mp4.py --dir D:\\Videos --classify-only --n-clusters 8
 
 ================ v2.4 参数说明 ================
 
@@ -128,6 +153,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 from collections import defaultdict
@@ -184,10 +210,10 @@ FFMPEG_AVAILABLE = bool(shutil.which("ffmpeg"))
 # ============================================================
 # 模块 0：全局配置常量 + 退出码
 # ============================================================
-__version__ = "2.4.0"
+__version__ = "2.5.0"
 
 # 缓存版本号（算法变更时自动作废旧缓存）
-CACHE_VERSION = "2.4"
+CACHE_VERSION = "2.5"
 
 # 基础参数
 HASH_SIZE = 8
@@ -240,23 +266,64 @@ EXIT_HAS_DUPLICATES = 1  # 存在重复分组
 EXIT_PARSE_ERROR = 2    # 视频解析失败
 EXIT_BAD_ARGS = 3      # 参数错误
 
+# ============================================================
+# 【改造 v2.4】全局状态重构：AppContext 上下文类
+# 统一管理所有全局状态，解决多子命令状态污染、线程安全问题
+# ============================================================
+
+class AppContext:
+    """应用全局状态容器（单例模式）"""
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+        self._initialized = True
+        # 【改造】原全局变量迁移到此处
+        self.global_cache: dict = {}
+        self.global_exit_code: int = EXIT_OK
+        self.global_results_saved: bool = False
+        self.quiet_mode: bool = False
+        self.semantic_stats: dict = {}
+        self.log_file_handle: Optional[object] = None
+        
+        # CLIP 模型状态
+        self.semantic_clip_model: Optional[object] = None
+        self.semantic_clip_preprocess: Optional[object] = None
+        self.semantic_clip_device: str = "cuda" if _AI_CUDA_OK else "cpu"
+
+        # 分类相关状态（v2.5 新增）
+        self.classify_results: dict = {}
+        self.classify_mapping: dict = {}
+
+# 全局上下文实例
+_APP_CTX = AppContext()
+
+# 向后兼容的全局引用（将被逐步淘汰）
+_global_cache = _APP_CTX.global_cache
+_global_exit_code = _APP_CTX.global_exit_code
+_quiet_mode = _APP_CTX.quiet_mode
+_semantic_stats = _APP_CTX.semantic_stats
+_semantic_clip_model = _APP_CTX.semantic_clip_model
+_semantic_clip_preprocess = _APP_CTX.semantic_clip_preprocess
+_semantic_clip_device = _APP_CTX.semantic_clip_device
+_log_file_handle = _APP_CTX.log_file_handle
+_global_results_saved = _APP_CTX.global_results_saved
+
 # CLIP 模型全局引用（延迟加载，v2.2）
-_semantic_clip_model = None
-_semantic_clip_preprocess = None
-_semantic_clip_device = "cuda" if _AI_CUDA_OK else "cpu"
-
 # 全局状态
-_global_cache = {}
-_global_exit_code = EXIT_OK
-_global_results_saved = False
-_quiet_mode = False
-_semantic_stats = {}   # v2.2 新增：AI 语义统计
+# v2.5 改造：以上全局变量均通过 _APP_CTX 管理，预留兼容层
 
 
-# ============================================================
-# 模块 1：日志系统
-# ============================================================
-_log_file_handle = None
 
 
 def log_init(log_dir: str):
@@ -432,6 +499,15 @@ def _build_shared_parser():
                         help="过滤AI判定低质量模糊暗光视频")
     parser.add_argument("--link-mode", action="store_true", default=False,
                         help="数据集拆分使用硬链接，不重复复制视频")
+    # 【v2.5 新增】AI 自动分类参数
+    parser.add_argument("--execute", action="store_true", default=False,
+                        help="执行文件操作（默认 dry-run 预览模式）")
+    parser.add_argument("--n-clusters", type=int, default=0,
+                        help="自动分类目标聚类数 (0=自动估算)")
+    parser.add_argument("--classify-only", action="store_true", default=False,
+                        help="仅执行 AI 自动分类，不查重")
+    parser.add_argument("--classify-method", type=str, default="kmeans",
+                        help="分类算法 (kmeans)")
     return parser
 
 
@@ -443,7 +519,8 @@ def parse_args():
     subcommands = {"scan", "clean-cache", "merge-cache", "verify-cache", "version", "help",
                    "semantic-analyze", "dataset-filter", "cluster-scene",
                    "clear-semantic-cache", "dataset-split",
-                   "duration-stat", "reload-labels", "test"}
+                   "duration-stat", "reload-labels", "test",
+                   "auto-classify"}  # 【v2.5 新增】AI 自动分类子命令
 
     # 提取第一个非flag参数来判断模式
     first_arg = None
@@ -512,7 +589,7 @@ def load_config_file(config_path: str, args):
         "cluster_semantic": "cluster-semantic", "export_dataset": "export-dataset",
         "scene_thresh": "scene-thresh", "embed_cache": "embed-cache",
         "quiet": "quiet", "dry_run": "dry-run",
-        # 【改造 v2.4】新增参数映射，支持 config.ini 自定义
+        # 【改造 v2.4/v2.5】新增参数映射，支持 config.ini 自定义
         "duration_filter": "duration-filter",
         "duration_export": "duration-export",
         "no_store_frames": "no-store-frames",
@@ -529,6 +606,11 @@ def load_config_file(config_path: str, args):
         "protect_folder": "protect-folder",
         "protect_file": "protect-file",
         "gen_restore": "gen-restore",
+        # 【v2.5 新增】AI 自动分类参数映射
+        "classify_only": "classify-only",
+        "classify_method": "classify-method",
+        "n_clusters": "n-clusters",
+        "execute": "execute",
     }
     for config_key, arg_key in mapping.items():
         if config_key in sec:
@@ -3888,6 +3970,114 @@ def _run_gen_restore(args):
         log(f"错误: 生成恢复脚本失败: {e}")
 
 
+# 【v2.5 新增】AI 自动分类子命令
+def _run_auto_classify(args):
+    """执行 AI 自动分类"""
+    if not AI_MODULE_AVAILABLE:
+        log("[错误] AI 自动分类需要 torch/open_clip/scikit-learn 库", force=True)
+        log("  安装: pip install -r requirements_ai.txt", force=True)
+        sys.exit(EXIT_BAD_ARGS)
+
+    folder_path = _resolve_path(args.dir)
+    recursive = not args.no_recursive
+    output_dir = _resolve_path(args.output_dir) or os.path.join(folder_path, "_classify_output")
+    dry_run = not getattr(args, "execute", False)
+    n_clusters = getattr(args, "n_clusters", 0)
+    classify_method = getattr(args, "classify_method", "kmeans")
+    cluster_thresh = getattr(args, "cluster_thresh", 0.5)
+    link_mode = "hardlink" if getattr(args, "link_mode", False) else "dry-run"
+    
+    # 【v2.5 联动】筛选条件
+    skip_low_quality = getattr(args, "skip_low_quality", False)
+
+    # 1. 扫描视频
+    log(f"\n[步骤1] 扫描视频: {folder_path}", force=True)
+    mp4_files = scan_videos(folder_path, recursive)
+    log(f"  找到 {len(mp4_files)} 个视频", force=True)
+
+    if not mp4_files:
+        log("  无视频可处理", force=True)
+        return
+
+    # 1.5 【v2.5 联动】应用时长/分辨率筛选（复用现有函数）
+    cache_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), CACHE_FILE)
+    mp4_files, filter_stats = apply_duration_resolution_filter(
+        mp4_files, args, cache_path
+    )
+    if filter_stats.get("total_after", 0) < filter_stats.get("total_before", 0):
+        log(f"  筛选后剩余 {len(mp4_files)} 个视频", force=True)
+
+    # 2. 加载/提取语义特征
+    log(f"\n[步骤2] 提取 AI 语义特征...", force=True)
+    semantic_data = {}
+    cache = load_cache(cache_path)
+
+    # 已有缓存
+    for f in mp4_files:
+        path = f["path"]
+        if path in cache and "semantic_emb" in cache[path]:
+            semantic_data[path] = cache[path]
+
+    log(f"  已有语义缓存: {len(semantic_data)} 条", force=True)
+
+    # 需要新提取的
+    to_analyze = [f for f in mp4_files if f["path"] not in semantic_data]
+    if to_analyze:
+        log(f"  新提取: {len(to_analyze)} 个视频", force=True)
+        model, preprocess, device = load_clip_model()
+        
+        for i, f in enumerate(to_analyze):
+            path = f["path"]
+            try:
+                result = semantic_analyze_video(path, model, preprocess, device)
+                semantic_data[path] = result
+                cache[path] = result
+            except Exception as e:
+                log(f"    [警告] 分析失败 {f['name']}: {e}")
+            
+            if (i + 1) % 50 == 0:
+                log(f"    进度: {i + 1}/{len(to_analyze)}")
+                save_cache(cache_path, cache)
+
+        save_cache(cache_path, cache)
+    
+    # 2.5 【v2.5 联动】低质量过滤
+    if skip_low_quality:
+        log(f"\n[步骤2.5] 过滤低质量视频...", force=True)
+        before = len(mp4_files)
+        mp4_files, semantic_data, removed = apply_skip_low_quality(
+            mp4_files, semantic_data, log_fn=log
+        )
+        after = len(mp4_files)
+        log(f"  移除 {removed} 个低质量视频，剩余 {after} 个", force=True)
+
+    # 3. 执行自动分类
+    log(f"\n[步骤3] AI 自动分类 (方法={classify_method}, 聚类数={n_clusters or '自动'})...", force=True)
+    from ai_semantic import auto_classify_videos
+    
+    classify_result = auto_classify_videos(
+        semantic_data=semantic_data,
+        output_dir=output_dir,
+        classify_method=classify_method,
+        n_clusters=n_clusters,
+        cluster_thresh=cluster_thresh,
+        link_mode=link_mode,
+        dry_run=dry_run,
+        _log_fn=log,
+    )
+
+    # 4. 汇总
+    log(f"\n{'='*60}", force=True)
+    log(f"  AI 自动分类完成", force=True)
+    log(f"{'='*60}", force=True)
+    log(f"  总视频数: {len(mp4_files)}", force=True)
+    log(f"  分类数: {len(classify_result.get('cluster_names', {}))}", force=True)
+    log(f"  报告路径: {classify_result.get('classify_report', '')}", force=True)
+    if dry_run:
+        log(f"\n  [试运行] 未执行文件操作。如需执行，添加 --execute 参数。", force=True)
+        log(f"  示例: python find_mp4.py auto-classify --dir {folder_path} --execute", force=True)
+
+
 def main():
     global _global_cache, _global_exit_code, _quiet_mode
 
@@ -3987,6 +4177,11 @@ def main():
     # --test
     if cmd == "test":
         _run_test(args)
+        return
+
+    # 【v2.5 新增】--auto-classify AI 自动分类
+    if cmd == "auto-classify" or getattr(args, "classify_only", False):
+        _run_auto_classify(args)
         return
 
     # --gen-restore
@@ -4378,4 +4573,16 @@ if __name__ == "__main__":
 #
 # === 13. AI 低质量过滤 + 帧不持久化（节省内存） ===
 # python find_mp4.py --dir D:\\Videos --semantic --skip-low-quality --no-store-frames
+#
+# === 14. v2.5 AI 自动分类 ===
+# # 预览模式（默认，不修改文件）
+# python find_mp4.py auto-classify --dir D:\\Videos
+# # 执行硬链接分类
+# python find_mp4.py auto-classify --dir D:\\Videos --execute --link-mode
+# # 分类 + 筛选联动
+# python find_mp4.py auto-classify --dir D:\\Videos --duration-filter ">=60" --min-res 1920
+# python find_mp4.py auto-classify --dir D:\\Videos --skip-low-quality --n-clusters 8
+# # 仅分类（扁平参数模式）
+# python find_mp4.py --dir D:\\Videos --classify-only
+# python find_mp4.py --dir D:\\Videos --classify-only --execute --link-mode
 # ============================================================

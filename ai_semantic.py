@@ -1136,3 +1136,178 @@ def _tag_names(tag_list: list) -> str:
         elif isinstance(item, str):
             names.append(item)
     return ", ".join(names) if names else "-"
+
+
+# ============================================================
+# 【v2.5 新增】AI 自动分类模块
+# ============================================================
+
+def auto_classify_videos(
+    semantic_data: dict,
+    output_dir: str,
+    classify_method: str = "kmeans",
+    n_clusters: int = 10,
+    cluster_thresh: float = 0.5,
+    link_mode: str = "dry-run",
+    dry_run: bool = True,
+    _log_fn=None
+) -> dict:
+    """
+    【v2.5 新增】AI 自动分类核心函数。
+    基于 CLIP 特征向量执行 K-Means 聚类，自动生成类别名称，并按策略组织文件。
+
+    Args:
+        semantic_data: {video_path: {...semantic info...}}
+        output_dir: 分类输出目录
+        classify_method: 聚类算法 (kmeans)
+        n_clusters: 目标聚类数 (0=自动估算)
+        cluster_thresh: 聚类松紧阈值
+        link_mode: 'dry-run'(预览) / 'hardlink'(硬链接) / 'copy'(复制) / 'move'(移动)
+        dry_run: 是否仅预览不执行文件操作
+        _log_fn: 日志输出函数
+
+    Returns:
+        dict: {
+            'clusters': {cluster_id: [video_path, ...]},
+            'cluster_names': {cluster_id: 'auto_name'},
+            'classify_report': 'report_path'
+        }
+    """
+    log = _log_fn or (lambda msg: None)
+
+    if not SKLEARN_OK:
+        log("[错误] AI 分类需要 scikit-learn 库")
+        log("  安装: pip install scikit-learn")
+        return {"clusters": {}, "cluster_names": {}, "classify_report": ""}
+
+    # 1. 提取特征向量
+    embeddings = []
+    video_paths = []
+    for path, info in semantic_data.items():
+        emb = info.get("semantic_emb")
+        if emb is not None:
+            embeddings.append(emb)
+            video_paths.append(path)
+
+    if len(embeddings) < 2:
+        log("[警告] 有效特征向量不足，无法执行分类")
+        return {"clusters": {}, "cluster_names": {}, "classify_report": ""}
+
+    embeddings_np = np.array(embeddings)
+
+    # 2. 执行 K-Means 聚类
+    from sklearn.cluster import KMeans
+
+    if n_clusters <= 0:
+        n_clusters = min(20, max(2, len(embeddings) // 5))
+
+    try:
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        labels = kmeans.fit_predict(embeddings_np)
+    except Exception as e:
+        log(f"[错误] K-Means 聚类失败: {e}")
+        return {"clusters": {}, "cluster_names": {}, "classify_report": ""}
+
+    # 3. 构建分组映射
+    clusters = {}
+    for path, label in zip(video_paths, labels):
+        lid = int(label)
+        clusters.setdefault(lid, []).append(path)
+
+    # 4. 自动生成类别名称
+    cluster_names = {}
+    for lid, paths in clusters.items():
+        # 收集该聚类中所有视频的高频标签
+        tag_counter = defaultdict(int)
+        for p in paths:
+            info = semantic_data.get(p, {})
+            # 场景标签权重最高
+            for t in info.get("scene_tags", []):
+                if isinstance(t, dict):
+                    tag_counter[t.get("label", "")] += 3
+                elif isinstance(t, str):
+                    tag_counter[t] += 3
+            # 对象标签次之
+            for t in info.get("object_tags", []):
+                if isinstance(t, dict):
+                    tag_counter[t.get("label", "")] += 2
+                elif isinstance(t, str):
+                    tag_counter[t] += 2
+            # 动作标签
+            for t in info.get("action_tags", []):
+                if isinstance(t, dict):
+                    tag_counter[t.get("label", "")] += 1
+                elif isinstance(t, str):
+                    tag_counter[t] += 1
+
+        if tag_counter:
+            top_tags = sorted(tag_counter.items(), key=lambda x: -x[1])[:3]
+            name_parts = [t for t, _ in top_tags if t]
+            cluster_names[lid] = "_".join(name_parts) if name_parts else f"类别_{lid}"
+        else:
+            cluster_names[lid] = f"类别_{lid}"
+
+    # 5. 整理分类结果
+    classify_result = {
+        "total_videos": len(video_paths),
+        "method": classify_method,
+        "n_clusters": len(clusters),
+        "clusters": {},
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    for lid, paths in clusters.items():
+        cname = cluster_names.get(lid, f"类别_{lid}")
+        # 清理非法字符
+        safe_name = "".join(c for c in cname if c not in '<>:"/\\|?*')[:60]
+        classify_result["clusters"][safe_name] = {
+            "count": len(paths),
+            "videos": [{"path": p, "name": os.path.basename(p)} for p in paths]
+        }
+
+    # 6. 导出分类报告
+    report_path = os.path.join(output_dir, "auto_classify_report.json")
+    try:
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(classify_result, f, ensure_ascii=False, indent=2)
+        log(f"[导出] 分类报告 → {report_path}")
+    except (IOError, OSError) as e:
+        log(f"[错误] 分类报告导出失败: {e}")
+
+    # 7. 执行文件操作
+    if not dry_run and link_mode in ("hardlink", "copy", "move"):
+        log(f"\n[执行] 开始 {link_mode} 分类操作...")
+        for cname, cluster_data in classify_result["clusters"].items():
+            cluster_dir = os.path.join(output_dir, cname)
+            os.makedirs(cluster_dir, exist_ok=True)
+
+            for item in cluster_data["videos"]:
+                src = item["path"]
+                dst = os.path.join(cluster_dir, os.path.basename(src))
+                try:
+                    if link_mode == "hardlink":
+                        if os.path.exists(dst):
+                            dst = dst.replace(".mp4", "_dup.mp4")
+                        os.link(src, dst)
+                    elif link_mode == "copy":
+                        if os.path.exists(dst):
+                            dst = dst.replace(".mp4", "_dup.mp4")
+                        import shutil
+                        shutil.copy2(src, dst)
+                    elif link_mode == "move":
+                        if os.path.exists(dst):
+                            dst = dst.replace(".mp4", "_dup.mp4")
+                        import shutil
+                        shutil.move(src, dst)
+                except (IOError, OSError) as e:
+                    log(f"  [警告] 操作失败 {os.path.basename(src)}: {e}")
+        log(f"[完成] 文件分类操作完成")
+    elif dry_run:
+        log(f"\n[试运行] 分类结果已预览，未执行文件操作。")
+        log(f"  如需执行，请添加 --execute 参数（默认使用硬链接）")
+
+    return {
+        "clusters": {lid: paths for lid, paths in clusters.items()},
+        "cluster_names": cluster_names,
+        "classify_report": report_path,
+    }

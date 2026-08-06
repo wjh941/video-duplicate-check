@@ -1,18 +1,19 @@
-# MP4 视频相似度查重工具 v2.3
+# MP4 视频相似度查重工具 v2.5
 
-基于感知哈希（pHash + dHash）+ AI 语义分析的视频重复检测与数据集标注工具，支持 LSH 加速、增量扫描、缓存管理、多格式导出、安全清理脚本、场景聚类、训练集清单导出。
+基于感知哈希（pHash + dHash）+ AI 语义分析的视频重复检测与数据集标注工具，支持 LSH 加速、增量扫描、缓存管理、多格式导出、安全清理脚本、场景聚类、训练集清单导出、AI 自动分类。
 
 ## 目录结构
 
 ```
 distinguish/
-├── find_mp4.py          # 主程序 v2.3
-├── ai_semantic.py       # AI 语义分析模块（v2.2 新增，可选）
+├── find_mp4.py          # 主程序 v2.5
+├── ai_semantic.py       # AI 语义分析+自动分类模块（v2.5 增强）
 ├── requirements.txt     # 基础依赖清单
-├── requirements_ai.txt  # AI 扩展依赖清单（v2.2 新增）
+├── requirements_ai.txt  # AI 扩展依赖清单
+├── config.ini           # 配置文件模板（v2.4 新增）
 ├── install.bat          # Windows 一键安装脚本（区分基础/AI）
-├── install_ai.bat       # AI 依赖一键安装脚本（v2.2 新增）
-├── dataset_labels.ini   # 自定义标签配置文件（v2.3 新增，可选）
+├── install_ai.bat       # AI 依赖一键安装脚本
+├── dataset_labels.ini   # 自定义标签配置文件（v2.3 新增）
 ├── .gitignore           # Git 忽略规则
 ├── README.md            # 本文档
 └── (运行时生成的输出文件)
@@ -92,6 +93,26 @@ python find_mp4.py --dir D:\Videos --format html --gen-cleanup
 python find_mp4.py --dir D:\Videos --dry-run
 ```
 
+### 3. v2.5 AI 自动分类
+
+```bash
+# AI 自动分类（默认 dry-run 预览模式，不修改文件）
+python find_mp4.py auto-classify --dir D:\Videos
+
+# AI 自动分类并执行硬链接组织文件
+python find_mp4.py auto-classify --dir D:\Videos --execute --link-mode
+
+# AI 自动分类 + 时长筛选联动
+python find_mp4.py auto-classify --dir D:\Videos --duration-filter ">=60"
+
+# AI 自动分类 + 分辨率筛选 + 低质量过滤
+python find_mp4.py auto-classify --dir D:\Videos --min-res 1920 --skip-low-quality
+
+# 仅分类（扁平参数模式）
+python find_mp4.py --dir D:\Videos --classify-only
+python find_mp4.py --dir D:\Videos --classify-only --execute --link-mode
+```
+
 ## 参数说明
 
 ### 基础参数
@@ -162,6 +183,35 @@ python find_mp4.py --dir D:\Videos --dry-run
 | `--compress-cache` | flag | False | 写出时压缩缓存文件（gzip），减小磁盘占用 |
 | `--no-store-embed` | flag | False | 不把 CLIP 特征向量写入缓存，仅存语义标签，节省空间 |
 
+### v2.4 新增参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `--duration-filter` | str | "" | 时长筛选条件，格式：>=60、<30、>120&<=360（单位秒） |
+| `--duration-stat` | flag | False | 仅统计符合时长条件视频数量，不执行哈希查重 |
+| `--duration-export` | flag | False | 导出符合时长条件视频路径清单到 txt |
+| `--no-store-frames` | flag | False | 不将预览帧持久化存入缓存，降低内存占用 |
+| `--min-res` | int | 0 | 筛选最小分辨率宽度，如 1920 |
+| `--max-res` | int | 0 | 筛选最大分辨率宽度，如 3840 |
+| `--gen-restore` | flag | False | 根据审计日志生成视频恢复 bat/sh 脚本 |
+| `--export-clean-list` | flag | False | 单独输出仅待清理视频路径清单 |
+| `--output-prefix` | str | "" | 自定义输出文件前缀，多批次扫描不覆盖报告 |
+| `--path-mask` | flag | False | 审计日志隐藏路径中间层级，保护素材隐私 |
+| `--cluster-thresh` | float | 0.5 | 语义聚类松紧阈值，默认 0.5 |
+| `--skip-low-quality` | flag | False | 过滤 AI 判定低质量模糊暗光视频 |
+| `--link-mode` | flag | False | 数据集拆分使用硬链接，不重复复制视频 |
+| `--format xlsx` | flag | False | Excel 导出（需 openpyxl 可选依赖） |
+
+### v2.5 新增 AI 自动分类参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `auto-classify` | 子命令 | - | AI 自动分类子命令（基于 CLIP 特征聚类） |
+| `--classify-only` | flag | False | 仅执行 AI 自动分类，不查重 |
+| `--classify-method` | str | kmeans | 分类算法（目前支持 kmeans） |
+| `--n-clusters` | int | 0 | 目标聚类数 (0=自动估算) |
+| `--execute` | flag | False | 执行文件操作（默认 dry-run 预览模式） |
+
 ### 子命令
 
 | 命令 | 说明 |
@@ -176,6 +226,10 @@ python find_mp4.py --dir D:\Videos --dry-run
 | **`cluster-scene`** | **纯画面内容聚类分组，不依赖文件哈希（v2.2 新增）** |
 | **`clear-semantic-cache`** | **清理 AI 语义缓存（仅删语义/嵌入，保留哈希缓存）（v2.3 新增）** |
 | **`dataset-split`** | **数据集分类拆分，按用途/场景将视频分组导出到独立子目录（v2.3 新增）** |
+| **`duration-stat`** | **时长统计子命令（v2.4 新增）** |
+| **`reload-labels`** | **热加载 dataset_labels.ini 标签配置（v2.4 新增）** |
+| **`test`** | **内置核心逻辑自动化测试（v2.4 新增）** |
+| **`auto-classify`** | **AI 自动分类子命令（v2.5 新增）** |
 
 #### v2.3 子命令详解
 
@@ -225,6 +279,21 @@ python find_mp4.py --dir D:\Videos --dry-run
 | `train_sample_list.txt` | 筛选出可用于 AI 训练的视频路径清单 |
 | `dataset_stats.md` | 数据集统计汇总（按用途分布、场景分布） |
 | `scene_cluster.html` | 语义聚类可视化报告（交互折叠、搜索过滤） |
+
+### v2.4 新增输出
+
+| 文件 | 说明 |
+|------|------|
+| `clean_list.txt` | 仅待清理视频路径清单（不含保留素材） |
+| `restore_duplicates.bat` | 视频恢复脚本（根据审计日志生成） |
+| `duration_filter_list.txt` | 时长筛选视频路径清单 |
+
+### v2.5 新增 AI 自动分类输出
+
+| 文件 | 说明 |
+|------|------|
+| `auto_classify_report.json` | AI 自动分类报告（含聚类结果、类别名称、视频列表） |
+| `_classify_output/` | 分类输出根目录（按类别名组织子目录） |
 
 ## AI 语义分析功能详解
 
@@ -334,6 +403,65 @@ purpose = 通用素材
 - 自定义标签会与内置标签**合并**（同名标签以自定义为准）
 - 用途规则采用关键词命中判定，命中任一关键词即归类
 - 修改后建议执行 `python find_mp4.py clear-semantic-cache --dir <目录>` 清理旧语义缓存以重新识别
+
+## v2.5 AI 自动分类功能详解
+
+### 功能概述
+
+AI 自动分类功能基于 CLIP 视觉特征向量，通过 K-Means 聚类算法将视频自动分组，并根据每组的高频语义标签自动生成类别名称。适用于大批量素材的自动化整理，支持监控、自动驾驶、人像、影视等场景。
+
+### 核心特性
+
+1. **零样本自动归类**：无需训练数据集，扫描后直接生成结构化素材文件夹
+2. **智能命名**：根据每个聚类中视频的场景/对象/动作标签自动生成类别名称
+3. **安全预览**：默认 dry-run 模式，仅预览分类结果，不修改原文件
+4. **文件组织**：支持硬链接（默认）、复制、移动三种方式组织分类文件
+5. **筛选联动**：可与时长、分辨率、低质量过滤等条件联动，精准分类
+
+### 使用场景
+
+```bash
+# 1. 预览模式（默认，不修改文件）
+python find_mp4.py auto-classify --dir D:\Videos
+
+# 2. 执行硬链接分类
+python find_mp4.py auto-classify --dir D:\Videos --execute --link-mode
+
+# 3. 分类 + 筛选联动
+python find_mp4.py auto-classify --dir D:\Videos --duration-filter ">=60"
+python find_mp4.py auto-classify --dir D:\Videos --min-res 1920 --skip-low-quality
+
+# 4. 指定聚类数
+python find_mp4.py auto-classify --dir D:\Videos --n-clusters 8
+```
+
+### 输出结构
+
+分类完成后，输出目录结构如下：
+```
+_output_dir/
+├── auto_classify_report.json    # 分类报告
+├── 类别1_场景描述/
+│   ├── video1.mp4 -> (硬链接原文件)
+│   └── video2.mp4
+├── 类别2_场景描述/
+│   └── video3.mp4
+└── ...
+```
+
+### 配置示例
+
+在 `config.ini` 中预设分类参数：
+```ini
+[scan]
+dir = D:\Videos
+semantic = true
+classify_only = true
+link_mode = true
+n_clusters = 8
+skip_low_quality = true
+min_res = 1080
+```
 
 ## 场景示例
 
@@ -483,6 +611,28 @@ python find_mp4.py --dir D:\huge_library --lite-csv --compress-cache --no-store-
 
 # 单独导出损坏视频路径清单，便于运维批量排查
 python find_mp4.py --dir D:\huge_library --export-bad-paths --check-only
+```
+
+### 场景十五：AI 自动分类整理素材（v2.5）
+适用：将大量混合素材自动按内容类别整理成结构化文件夹。
+
+```bash
+# 1. 预览模式（默认，不修改文件，仅预览分类结果）
+python find_mp4.py auto-classify --dir D:\Videos
+
+# 2. 执行硬链接分类（不复制文件，节省磁盘）
+python find_mp4.py auto-classify --dir D:\Videos --execute --link-mode
+
+# 3. 分类 + 筛选联动（仅对高清长视频分类）
+python find_mp4.py auto-classify --dir D:\Videos --min-res 1920 --duration-filter ">=60"
+
+# 4. 分类 + 低质量过滤（排除模糊暗光视频）
+python find_mp4.py auto-classify --dir D:\Videos --skip-low-quality --execute
+
+# 5. 自定义聚类数
+python find_mp4.py auto-classify --dir D:\Videos --n-clusters 10 --execute
+
+# 结果：D:\Videos\_classify_output\ 下按类别名生成子目录，包含对应视频硬链接
 ```
 
 ## 删除功能风险警示
