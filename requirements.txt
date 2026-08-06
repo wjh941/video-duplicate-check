@@ -6,9 +6,15 @@ imagehash==4.3.2
 tqdm==4.70.0
 psutil==7.2.2
 
+# ========== 可选依赖（按需安装） ==========
+# Excel 导出支持: --format xlsx
+# 安装: pip install openpyxl
+openpyxl>=3.1.0
+
 # ========== AI 语义分析扩展依赖（可选） ==========
 # 安装方式: pip install -r requirements_ai.txt
 torch>=2.0.0
 open-clip-torch>=2.20.0
 transformers>=4.30.0
 scikit-learn>=1.3.0
+

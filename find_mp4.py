@@ -1,52 +1,133 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MP4 视频相似度查重工具 v2.3
+MP4 视频相似度查重工具 v2.4
 ==============================
 功能：扫描指定目录下的视频文件，基于多哈希融合（pHash+dHash）检测内容相似/重复的视频。
 支持 LSH 加速、增量扫描、缓存管理、多格式导出、安全清理、子命令架构。
 v2.2 新增：AI 语义内容分析、场景聚类、数据集自动标注、训练集清单导出。
+v2.4 新增：时长筛选统计、分辨率过滤、Excel导出、HTML缩略图预览、硬链接拆分、
+          路径脱敏、缓存版本迁移、自定义权重配置、全局过滤规则、恢复脚本等。
 
 模块结构：
     0. 全局配置常量 + 退出码 + AI依赖检测
     1. 日志系统（双输出 + quiet 模式）
     2. 命令行参数解析（子命令 + 扁平参数兼容）
-    3. 文件扫描与过滤（多后缀 + 排除规则 + .duplicateignore）
-    4. 哈希缓存管理（版本化 + 分块 + 合并/校验 + 语义字段）
-    5. 哈希提取（双哈希融合 + 32x32预处理 + FFmpeg兜底 + 音频哈希）
-    6. 视频相似度比对（时长预筛 + LSH分桶 + double-check）
+    3. 文件扫描与过滤（多后缀 + 排除规则 + .duplicateignore + .globalignore）
+    4. 哈希缓存管理（版本化 + 分块 + 合并/校验 + 语义字段 + 自动迁移）
+    5. 哈希提取（双哈希融合 + 32x32预处理 + FFmpeg兜底 + 音频哈希 + --no-store-frames）
+    6. 视频相似度比对（时长预筛 + LSH分桶空桶跳过 + double-check + 自定义权重）
     7. 连通图分组（多维度保留策略）
-    8. 结果导出（CSV/TXT/MD/HTML/纯路径清单/审计日志/安全清理脚本）
+    8. 结果导出（CSV/TXT/MD/HTML+xlsx/纯路径清单/清理清单/审计日志/安全清理脚本/恢复脚本）
     9. 全局异常处理与主入口
     10. AI 语义分析模块（CLIP特征提取 + 场景分类 + 用途判定）
     11. 语义聚类与数据集导出
+    12. v2.4 时长筛选统计模块
 
-使用示例：
-    # 子命令模式（v2.2 推荐）
-    python find_mp4.py scan --dir D:\\Videos
-    python find_mp4.py scan --dir D:\\Videos --semantic --export-dataset
-    python find_mp4.py semantic-analyze --dir D:\\video
-    python find_mp4.py dataset-filter --purpose 监控 --dir D:\\car_data
-    python find_mp4.py scan --dir D:\\camera --cluster-semantic
-    python find_mp4.py scan --dir D:\\video --semantic --incremental --embed-cache
-    python find_mp4.py clean-cache
-    python find_mp4.py verify-cache
+================ v2.4 参数说明 ================
 
-    # 扁平参数模式（v2.1 兼容）
-    python find_mp4.py --dir D:\\Videos
-    python find_mp4.py --version
+【新增时长筛选统计参数】
+  --duration-filter <条件>   时长筛选条件，格式：>=60、<30、>120&<=360（单位秒）
+                             支持 & 多条件并列组合，仅处理匹配时长条件的视频
+  --duration-stat            仅统计符合时长条件视频数量，不执行哈希查重、不生成报告
+  --duration-export          导出符合时长条件视频路径清单到 txt
+
+【新增功能补充参数】
+  --no-store-frames          不将预览帧持久化存入缓存，降低内存占用（默认保留供AI复用）
+  --min-res <宽度>           筛选最小分辨率宽度，如 1920
+  --max-res <宽度>           筛选最大分辨率宽度，如 3840
+  --gen-restore              根据审计日志生成视频恢复 bat/sh 脚本
+  --export-clean-list        单独输出仅待清理视频路径清单，不含保留素材
+  --output-prefix <前缀>     自定义输出文件前缀，多批次扫描不覆盖报告
+  --path-mask                审计日志、报告隐藏路径中间层级，保护素材隐私
+  --cluster-thresh <阈值>    语义聚类松紧阈值，默认 0.5
+  --skip-low-quality         过滤AI判定低质量模糊暗光视频，不参与后续查重
+  --link-mode                数据集拆分使用硬链接，不重复复制视频节省磁盘
+  --format xlsx              Excel 导出（需 openpyxl 可选依赖）
+
+【新增子命令】
+  duration-stat              时长统计子命令（纯计数快速模式）
+  reload-labels              热加载 dataset_labels.ini 标签配置
+  test                       内置核心逻辑自动化测试
+  gen-restore                根据审计日志生成恢复脚本（等同 --gen-restore）
+
+【参数冲突校验】
+  --fast 与 --double-check 互斥
+  --embed-cache 与 --no-semantic-cache 互斥
+  --hard-delete 需二次确认（控制台输入 YES）
+
+【安全特性】
+  --hard-delete              生成永久删除脚本（危险！需二次确认）
+  --path-mask                路径脱敏
+  保护目录使用完整分隔符精准匹配（杜绝 video 误匹配 video123）
+  --backup-path              清理前备份视频到指定目录
+
+================ 全套使用示例 ================
+
+# === 纯时长统计（不查重） ===
+python find_mp4.py duration-stat --dir D:\\Videos --duration-filter ">=60"
+python find_mp4.py duration-stat --dir D:\\Videos --duration-filter ">120&<=360" --duration-export
+
+# === 带时长筛选的查重 ===
+python find_mp4.py --dir D:\\Videos --duration-filter ">=60" --threshold 0.7
+python find_mp4.py --dir D:\\Videos --duration-filter "<30" --format html --gen-cleanup
+
+# === 导出时长清单 ===
+python find_mp4.py --dir D:\\Videos --duration-filter ">=60" --duration-export
+
+# === 分辨率过滤查重 ===
+python find_mp4.py --dir D:\\Videos --min-res 1920 --max-res 3840
+
+# === AI 语义聚类 ===
+python find_mp4.py scan --dir D:\\Videos --semantic --cluster-semantic --cluster-thresh 0.4
+python find_mp4.py cluster-scene --dir D:\\Videos
+
+# === 数据集筛选与拆分 ===
+python find_mp4.py dataset-filter --purpose 监控 --dir D:\\car_data
+python find_mp4.py dataset-split --dir D:\\Videos --link-mode
+
+# === 缓存合并 ===
+python find_mp4.py merge-cache cache1.json cache2.json
+
+# === 清理与恢复 ===
+python find_mp4.py --dir D:\\Videos --gen-cleanup --hard-delete
+python find_mp4.py --dir D:\\Videos --gen-cleanup --backup-path D:\\backup
+python find_mp4.py --gen-restore
+python find_mp4.py --dir D:\\Videos --export-clean-list --path-mask
+
+# === Excel 导出 ===
+python find_mp4.py --dir D:\\Videos --format xlsx --output-prefix batch1_
+
+# === 自定义权重（config.ini） ===
+python find_mp4.py --dir D:\\Videos --config config.ini
+
+# === 子命令模式 ===
+python find_mp4.py scan --dir D:\\Videos --semantic --export-dataset
+python find_mp4.py semantic-analyze --dir D:\\video
+python find_mp4.py reload-labels
+python find_mp4.py test
+python find_mp4.py clean-cache
+python find_mp4.py verify-cache
+
+# === 扁平参数模式（v2.1 兼容） ===
+python find_mp4.py --dir D:\\Videos
+python find_mp4.py --version
 """
 
 import argparse
+import base64
 import configparser
 import csv
 import fnmatch
+import glob as _glob
+import io
 import json
 import os
 import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 from collections import defaultdict
@@ -103,10 +184,10 @@ FFMPEG_AVAILABLE = bool(shutil.which("ffmpeg"))
 # ============================================================
 # 模块 0：全局配置常量 + 退出码
 # ============================================================
-__version__ = "2.3.0"
+__version__ = "2.4.0"
 
 # 缓存版本号（算法变更时自动作废旧缓存）
-CACHE_VERSION = "2.3"
+CACHE_VERSION = "2.4"
 
 # 基础参数
 HASH_SIZE = 8
@@ -129,6 +210,7 @@ CLEANUP_SCRIPT_WIN = "cleanup_duplicates.bat"
 CLEANUP_SCRIPT_LINUX = "cleanup_duplicates.sh"
 LOG_FILE = "run_log.txt"
 IGNORE_FILE = ".duplicateignore"
+GLOBAL_IGNORE_FILE = ".globalignore"  # v2.4 新增：程序同目录全局过滤规则文件
 
 # v2.2 AI 相关输出文件
 SEMANTIC_META = "video_semantic_meta.json"
@@ -136,6 +218,11 @@ DATASET_CATALOG = "dataset_catalog.csv"
 TRAIN_SAMPLE_LIST = "train_sample_list.txt"
 DATASET_STATS = "dataset_stats.md"
 SCENE_CLUSTER_HTML = "scene_cluster.html"
+
+# v2.4 新增输出文件
+CLEAN_LIST_FILE = "clean_list.txt"  # 仅待清理视频路径清单
+RESTORE_SCRIPT = "restore_duplicates.bat"  # 恢复脚本
+DURATION_LIST_FILE = "duration_filter_list.txt"  # 时长筛选清单
 
 # 错误类型
 ERR_READ_FAILED = "read_failed"
@@ -233,7 +320,7 @@ def _build_shared_parser():
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--no-cache", action="store_true", default=False)
     parser.add_argument("--output-dir", type=str, default=None)
-    parser.add_argument("--format", choices=["txt", "md", "html"], default="txt")
+    parser.add_argument("--format", choices=["txt", "md", "html", "xlsx"], default="txt")
     parser.add_argument("--fast", action="store_true", default=False)
     parser.add_argument("--check-only", action="store_true", default=False)
     parser.add_argument("--version", action="store_true", default=False)
@@ -317,6 +404,34 @@ def _build_shared_parser():
                         help="自动清理超过指定天数未修改的缓存，0=不清理")
     parser.add_argument("--compress-cache", action="store_true", default=False,
                         help="保存缓存时输出.gz压缩包")
+    # v2.4 新增：时长筛选统计参数
+    parser.add_argument("--duration-filter", type=str, default="",
+                        help="时长筛选条件，如 >=60、<30、>120&<=360（单位秒）")
+    parser.add_argument("--duration-stat", action="store_true", default=False,
+                        help="仅统计符合时长条件视频数量，不执行查重")
+    parser.add_argument("--duration-export", action="store_true", default=False,
+                        help="导出符合时长条件视频路径清单到txt")
+    # v2.4 新增：功能补充参数
+    parser.add_argument("--no-store-frames", action="store_true", default=False,
+                        help="不将预览帧持久化存入缓存，降低内存占用")
+    parser.add_argument("--min-res", type=int, default=0,
+                        help="筛选最小分辨率宽度，如 1920")
+    parser.add_argument("--max-res", type=int, default=0,
+                        help="筛选最大分辨率宽度，如 3840")
+    parser.add_argument("--gen-restore", action="store_true", default=False,
+                        help="根据审计日志生成视频恢复脚本")
+    parser.add_argument("--export-clean-list", action="store_true", default=False,
+                        help="单独输出仅待清理视频路径清单")
+    parser.add_argument("--output-prefix", type=str, default="",
+                        help="自定义输出文件前缀，多批次扫描不覆盖报告")
+    parser.add_argument("--path-mask", action="store_true", default=False,
+                        help="审计日志隐藏路径中间层级，保护素材隐私")
+    parser.add_argument("--cluster-thresh", type=float, default=0.5,
+                        help="语义聚类松紧阈值，默认 0.5")
+    parser.add_argument("--skip-low-quality", action="store_true", default=False,
+                        help="过滤AI判定低质量模糊暗光视频")
+    parser.add_argument("--link-mode", action="store_true", default=False,
+                        help="数据集拆分使用硬链接，不重复复制视频")
     return parser
 
 
@@ -327,7 +442,8 @@ def parse_args():
     # 检查第一个有效参数是否为子命令
     subcommands = {"scan", "clean-cache", "merge-cache", "verify-cache", "version", "help",
                    "semantic-analyze", "dataset-filter", "cluster-scene",
-                   "clear-semantic-cache", "dataset-split"}
+                   "clear-semantic-cache", "dataset-split",
+                   "duration-stat", "reload-labels", "test"}
 
     # 提取第一个非flag参数来判断模式
     first_arg = None
@@ -341,7 +457,7 @@ def parse_args():
     if not is_subcommand:
         # 扁平参数模式（v2.0 兼容）
         parser = argparse.ArgumentParser(
-            description="MP4 视频相似度查重工具 v2.3",
+            description="MP4 视频相似度查重工具 v2.4",
             parents=[shared],
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
@@ -396,6 +512,23 @@ def load_config_file(config_path: str, args):
         "cluster_semantic": "cluster-semantic", "export_dataset": "export-dataset",
         "scene_thresh": "scene-thresh", "embed_cache": "embed-cache",
         "quiet": "quiet", "dry_run": "dry-run",
+        # 【改造 v2.4】新增参数映射，支持 config.ini 自定义
+        "duration_filter": "duration-filter",
+        "duration_export": "duration-export",
+        "no_store_frames": "no-store-frames",
+        "min_res": "min-res", "max_res": "max-res",
+        "export_clean_list": "export-clean-list",
+        "output_prefix": "output-prefix",
+        "path_mask": "path-mask",
+        "cluster_thresh": "cluster-thresh",
+        "skip_low_quality": "skip-low-quality",
+        "link_mode": "link-mode",
+        "compress_cache": "compress-cache",
+        "hard_delete": "hard-delete",
+        "backup_path": "backup-path",
+        "protect_folder": "protect-folder",
+        "protect_file": "protect-file",
+        "gen_restore": "gen-restore",
     }
     for config_key, arg_key in mapping.items():
         if config_key in sec:
@@ -524,6 +657,29 @@ def _load_duplicateignore(folder_path: str) -> list[str]:
     return rules
 
 
+def _load_globalignore() -> list[str]:
+    """
+    读取程序同目录的 .globalignore 全局过滤规则（v2.4 新增）。
+    规则对所有扫描目录生效，与 .duplicateignore 合并使用。
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    global_ignore_path = os.path.join(script_dir, GLOBAL_IGNORE_FILE)
+    if not os.path.exists(global_ignore_path):
+        return []
+    rules = []
+    try:
+        with open(global_ignore_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    rules.append(line)
+        if rules:
+            log(f"  [过滤] 已加载 .globalignore 全局规则 ({len(rules)} 条)")
+    except (IOError, OSError):
+        pass
+    return rules
+
+
 def _match_ignore_rule(file_path: Path, rules: list[str]) -> bool:
     """检查文件是否匹配任意排除规则"""
     name = file_path.name
@@ -532,6 +688,40 @@ def _match_ignore_rule(file_path: Path, rules: list[str]) -> bool:
         if fnmatch.fnmatch(name, rule) or fnmatch.fnmatch(rel, rule):
             return True
     return False
+
+
+def load_weights_config(config_path: str = "") -> dict:
+    """
+    从 config.ini 加载相似度权重配置（v2.4 新增）。
+    支持 phash_weight、dhash_weight、audio_weight 自定义加权值，
+    替代代码硬编码 0.7/0.3/0.8。
+    返回 {"phash_weight": float, "dhash_weight": float, "audio_weight": float}
+    """
+    weights = {
+        "phash_weight": 0.7,
+        "dhash_weight": 0.3,
+        "audio_weight": 0.8,
+    }
+    if not config_path:
+        # 默认查找程序同目录 config.ini
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(script_dir, "config.ini")
+    if not os.path.exists(config_path):
+        return weights
+    try:
+        config = configparser.ConfigParser()
+        config.read(config_path, encoding="utf-8")
+        if config.has_section("weights"):
+            for key in ["phash_weight", "dhash_weight", "audio_weight"]:
+                if key in config["weights"]:
+                    try:
+                        weights[key] = float(config["weights"][key])
+                    except ValueError:
+                        pass
+            log(f"  [权重] 已加载 config.ini 自定义权重: {weights}")
+    except Exception as e:
+        log(f"  [警告] 读取 config.ini 权重失败: {e}，使用默认权重")
+    return weights
 
 
 def load_dataset_labels() -> dict:
@@ -612,6 +802,258 @@ def load_dataset_labels() -> dict:
     return labels
 
 
+# ============================================================
+# v2.4 新增：时长筛选统计模块
+# ============================================================
+def parse_duration_filter(filter_str: str) -> list[tuple[str, float]]:
+    """
+    解析时长筛选条件字符串（v2.4 新增）。
+    支持格式：>=60、<30、>120&<=360
+    返回 [(运算符, 数值), ...]
+    """
+    if not filter_str:
+        return []
+    conditions = []
+    # 按 & 分割多条件
+    parts = filter_str.split("&")
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        # 匹配运算符 + 数值
+        for op in [">=", "<=", "!=", ">", "<", "=="]:
+            if part.startswith(op):
+                num_str = part[len(op):].strip()
+                try:
+                    num = float(num_str)
+                    conditions.append((op, num))
+                except ValueError:
+                    pass
+                break
+    return conditions
+
+
+def match_duration(duration: float, conditions: list[tuple[str, float]]) -> bool:
+    """检查视频时长是否满足所有筛选条件（v2.4 新增）"""
+    if not conditions:
+        return True
+    for op, val in conditions:
+        if op == ">=" and not (duration >= val):
+            return False
+        elif op == "<=" and not (duration <= val):
+            return False
+        elif op == ">" and not (duration > val):
+            return False
+        elif op == "<" and not (duration < val):
+            return False
+        elif op == "==" and not (abs(duration - val) < 0.01):
+            return False
+        elif op == "!=" and not (abs(duration - val) >= 0.01):
+            return False
+    return True
+
+
+def _run_duration_stat(args):
+    """时长统计子命令（v2.4 新增）：仅统计不执行查重"""
+    global _quiet_mode
+    _quiet_mode = args.quiet
+    folder_path = _resolve_path(args.dir)
+    if args.output_dir:
+        output_dir = _resolve_path(args.output_dir)
+    else:
+        output_dir = os.path.dirname(os.path.abspath(__file__))
+    os.makedirs(output_dir, exist_ok=True)
+    log_init(output_dir)
+    signal.signal(signal.SIGINT, _signal_handler)
+
+    log("=" * 60, force=True)
+    log("  视频时长统计", force=True)
+    log("=" * 60, force=True)
+    log(f"  扫描目录: {folder_path}", force=True)
+
+    filter_str = getattr(args, "duration_filter", "") or getattr(args, "purpose", "")
+    if not filter_str:
+        filter_str = ">=0"  # 默认统计全部
+    conditions = parse_duration_filter(filter_str)
+    log(f"  筛选条件: {filter_str} (单位:秒)", force=True)
+
+    # 扫描并提取时长
+    mp4_files = scan_mp4_files(args)
+    if not mp4_files:
+        log("未找到视频文件", force=True)
+        return
+
+    log(f"  共找到 {len(mp4_files)} 个视频文件", force=True)
+    log("  正在读取视频时长...", force=True)
+
+    matched_files = []
+    total_duration = 0.0
+    matched_duration = 0.0
+
+    for fi in mp4_files:
+        path = fi["path"]
+        try:
+            cap = cv2.VideoCapture(path)
+            if cap.isOpened():
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                duration = total_frames / fps if fps > 0 else 0
+                cap.release()
+            else:
+                duration = 0
+        except Exception:
+            duration = 0
+
+        total_duration += duration
+        if match_duration(duration, conditions):
+            matched_files.append({"path": path, "name": fi["name"],
+                                  "duration": duration, "size": fi["size"],
+                                  "size_readable": fi["size_readable"]})
+            matched_duration += duration
+
+    # 统计汇总
+    total = len(mp4_files)
+    matched = len(matched_files)
+    pct = (matched / total * 100) if total > 0 else 0
+
+    log("\n" + "=" * 60, force=True)
+    log("  时长统计汇总", force=True)
+    log("=" * 60, force=True)
+    log(f"  总视频数:       {total}", force=True)
+    log(f"  符合条件数量:   {matched}", force=True)
+    log(f"  占比:           {pct:.1f}%", force=True)
+    log(f"  符合条件总时长: {matched_duration:.1f}秒 ({matched_duration/60:.1f}分钟)", force=True)
+    if total > 0:
+        log(f"  全部视频总时长: {total_duration:.1f}秒 ({total_duration/60:.1f}分钟)", force=True)
+    log("=" * 60, force=True)
+
+    # 导出清单
+    if getattr(args, "duration_export", False) and matched_files:
+        export_path = os.path.join(output_dir, "duration_filter_list.txt")
+        try:
+            with open(export_path, "w", encoding="utf-8") as f:
+                f.write(f"# 时长筛选清单 (条件: {filter_str})\n")
+                f.write(f"# 生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"# 符合条件: {matched}/{total}\n\n")
+                for mf in matched_files:
+                    f.write(f"{mf['path']}\t{mf['duration']:.1f}秒\t{mf['size_readable']}\n")
+            log(f"[导出] 时长清单 → {export_path}", force=True)
+        except (IOError, OSError) as e:
+            log(f"[错误] 导出失败: {e}")
+
+
+def apply_duration_resolution_filter(
+    mp4_files: list[dict], args, cache_path: str = "",
+) -> tuple[list[dict], dict]:
+    """
+    应用时长筛选 + 分辨率筛选（v2.4 新增）。
+    联动逻辑：筛选后全局过滤，哈希提取、AI分析、相似度比对仅处理匹配条件的视频。
+    返回 (过滤后的 mp4_files, 统计信息 dict)。
+    #【改造注释】时长筛选读取视频元数据（优先使用缓存），分辨率筛选读取缓存 width/height。
+    """
+    stats = {
+        "total_before": len(mp4_files),
+        "duration_filtered": 0,
+        "res_filtered": 0,
+        "total_after": len(mp4_files),
+    }
+
+    duration_filter = getattr(args, "duration_filter", "")
+    min_res = getattr(args, "min_res", 0)
+    max_res = getattr(args, "max_res", 0)
+    conditions = parse_duration_filter(duration_filter) if duration_filter else []
+
+    if not conditions and min_res <= 0 and max_res <= 0:
+        return mp4_files, stats
+
+    # 加载缓存用于分辨率查询（避免重复打开视频）
+    cache = {}
+    if cache_path and (min_res > 0 or max_res > 0):
+        cache = load_cache(cache_path)
+
+    filtered = []
+    for fi in mp4_files:
+        path = fi["path"]
+        keep = True
+
+        # 时长筛选
+        if conditions:
+            duration = 0.0
+            try:
+                cap = cv2.VideoCapture(path)
+                if cap.isOpened():
+                    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    fps = cap.get(cv2.CAP_PROP_FPS)
+                    duration = total_frames / fps if fps > 0 else 0
+                    cap.release()
+            except Exception:
+                duration = 0.0
+            if not match_duration(duration, conditions):
+                stats["duration_filtered"] += 1
+                keep = False
+
+        # 分辨率筛选
+        if keep and (min_res > 0 or max_res > 0):
+            width = 0
+            # 优先从缓存读取
+            if path in cache and isinstance(cache[path], dict):
+                width = cache[path].get("width", 0)
+            if width <= 0:
+                try:
+                    cap = cv2.VideoCapture(path)
+                    if cap.isOpened():
+                        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                        cap.release()
+                except Exception:
+                    width = 0
+            if min_res > 0 and width < min_res:
+                stats["res_filtered"] += 1
+                keep = False
+            elif max_res > 0 and width > max_res:
+                stats["res_filtered"] += 1
+                keep = False
+
+        if keep:
+            filtered.append(fi)
+
+    stats["total_after"] = len(filtered)
+    if stats["duration_filtered"] > 0 or stats["res_filtered"] > 0:
+        log(f"  [筛选] 时长筛除 {stats['duration_filtered']} 个，"
+            f"分辨率筛除 {stats['res_filtered']} 个，"
+            f"剩余 {stats['total_after']}/{stats['total_before']}")
+    return filtered, stats
+
+
+def apply_skip_low_quality(
+    mp4_files: list[dict], semantic_results: dict,
+) -> tuple[list[dict], dict, int]:
+    """
+    应用 --skip-low-quality 过滤（v2.4 新增）。
+    扫描阶段直接过滤 AI 判定低质量模糊暗光视频，不参与后续查重。
+    返回 (过滤后的 mp4_files, 过滤后的 semantic_results, 移除数量)。
+    """
+    # 质量阈值：清晰度<0.3 或 亮度<0.2 视为低质量
+    MIN_CLARITY = 0.3
+    MIN_BRIGHTNESS = 0.2
+    removed = 0
+    keep_indices = set()
+    for i, sd in semantic_results.items():
+        qs = sd.get("quality_score", 1.0)
+        conf = sd.get("semantic_conf", {})
+        # 质量分过低或明确标记不适合训练
+        if qs < MIN_CLARITY:
+            removed += 1
+            continue
+        keep_indices.add(i)
+
+    if removed == 0:
+        return mp4_files, semantic_results, 0
+
+    filtered_semantic = {i: sd for i, sd in semantic_results.items() if i in keep_indices}
+    log(f"  [skip-low-quality] 过滤 {removed} 个低质量视频")
+    return mp4_files, filtered_semantic, removed
+
+
 def scan_mp4_files(args) -> list[dict]:
     """
     扫描 MP4 文件。
@@ -625,7 +1067,9 @@ def scan_mp4_files(args) -> list[dict]:
     exclude_folders = set(f.strip().lower() for f in (args.exclude_folder or "").split(",") if f.strip())
     min_size = _parse_size_str(args.exclude_size_lt)
     max_size = _parse_size_str(args.exclude_size_gt)
+    # 【改造 v2.4】合并目录级 .duplicateignore + 程序同目录 .globalignore 全局规则
     ignore_rules = _load_duplicateignore(folder_path)
+    ignore_rules.extend(_load_globalignore())
 
     folder = Path(folder_path)
     if not folder.exists():
@@ -734,6 +1178,44 @@ def _normalize_path(path_str: str) -> str:
     return resolved
 
 
+def _migrate_cache_version(data: dict, old_version: str, new_version: str) -> Optional[dict]:
+    """
+    缓存版本自动迁移（v2.4 新增）。
+    旧版本缓存自动转换新版字段，无需全量重新扫描。
+    迁移规则：保留原有哈希字段，补全缺失的元数据字段，更新版本号。
+    返回迁移后的 dict，无法迁移返回 None。
+    """
+    if not data or not isinstance(data, dict):
+        return None
+
+    # 支持的迁移路径：2.0/2.1/2.2/2.3 → 2.4
+    migratable = {"2.0", "2.1", "2.2", "2.3", "2.4.0"}
+    if old_version not in migratable:
+        return None
+
+    try:
+        migrated = {"_version": new_version}
+        migrated_count = 0
+        for key, entry in data.items():
+            if key.startswith("_"):
+                continue
+            if not isinstance(entry, dict):
+                continue
+            # 补全缺失字段（v2.4 新增字段默认值）
+            entry.setdefault("width", entry.get("width", 0))
+            entry.setdefault("height", entry.get("height", 0))
+            entry.setdefault("fps", entry.get("fps", 0))
+            entry.setdefault("audio", entry.get("audio"))
+            # v2.4 新增字段：默认为空，不强制添加
+            migrated[key] = entry
+            migrated_count += 1
+        log(f"  [缓存迁移] 成功迁移 {migrated_count} 条缓存记录")
+        return migrated
+    except Exception as e:
+        log(f"  [缓存迁移] 迁移失败: {e}")
+        return None
+
+
 def load_cache(cache_path: str) -> dict:
     """
     加载缓存（v2.3 重写：支持分块自动合并读取）。
@@ -741,15 +1223,37 @@ def load_cache(cache_path: str) -> dict:
     解决分块后缓存读不全、命中失效问题。
     """
     if not os.path.exists(cache_path):
-        return {"_version": CACHE_VERSION}
+        # 【改造】自动识别 .gz 压缩缓存
+        gz_path = cache_path + ".gz"
+        if os.path.exists(gz_path):
+            cache_path = gz_path
+        else:
+            return {"_version": CACHE_VERSION}
     try:
-        with open(cache_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        # 【改造】支持 gzip 压缩缓存加载
+        if cache_path.endswith(".gz"):
+            import gzip
+            with gzip.open(cache_path, "rt", encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
         if not isinstance(data, dict):
             raise ValueError("缓存格式异常")
-        # 版本校验
+        # 版本校验 + 自动迁移
         stored_version = data.get("_version", "0")
         if stored_version != CACHE_VERSION:
+            # 【改造 v2.4】缓存版本自动迁移：旧版本缓存自动转换新版字段，无需全量重新扫描
+            migrated = _migrate_cache_version(data, stored_version, CACHE_VERSION)
+            if migrated is not None:
+                log(f"  [缓存] 自动迁移 v{stored_version} → v{CACHE_VERSION}，保留 {len([k for k in migrated if not k.startswith('_')])} 条缓存")
+                # 保存迁移后的缓存
+                try:
+                    save_cache(cache_path, migrated)
+                except Exception:
+                    pass
+                return migrated
+            # 无法迁移则重建
             log(f"  [警告] 缓存版本不匹配 (当前v{CACHE_VERSION}, 缓存v{stored_version})，将重建缓存")
             backup_path = cache_path + ".bak"
             try:
@@ -760,11 +1264,13 @@ def load_cache(cache_path: str) -> dict:
             return {"_version": CACHE_VERSION}
 
         # v2.3 新增：分块缓存自动合并读取
+        # 【改造修复】合并分片缓存时仅保留主文件 _version，不复制 _chunks 元字段
         num_chunks = data.get("_chunks", 0)
         if num_chunks and num_chunks > 0:
             base = os.path.splitext(cache_path)[0]
             cache_dir = os.path.dirname(cache_path) or "."
-            merged = {k: v for k, v in data.items() if k.startswith("_")}
+            # 【改造】仅保留 _version，不复制 _chunks 避免元字段污染
+            merged = {"_version": CACHE_VERSION}
             loaded_chunks = 0
             for i in range(1, num_chunks + 1):
                 part_path = f"{base}_part{i}.json"
@@ -775,6 +1281,7 @@ def load_cache(cache_path: str) -> dict:
                     with open(part_path, "r", encoding="utf-8") as pf:
                         part_data = json.load(pf)
                     if isinstance(part_data, dict):
+                        # 【改造】分片仅覆盖视频条目，不覆盖全局缓存配置
                         for k, v in part_data.items():
                             if not k.startswith("_"):
                                 merged[k] = v
@@ -797,40 +1304,71 @@ def load_cache(cache_path: str) -> dict:
         return {"_version": CACHE_VERSION}
 
 
-def save_cache(cache_path: str, cache: dict, chunk_size: int = 500):
+def save_cache(cache_path: str, cache: dict, chunk_size: int = 500,
+               compress: bool = False):
     """
-    保存缓存。条目超过 chunk_size 时自动分块。
+    保存缓存（v2.4 修复：原子写入 tmp+rename 防 Ctrl+C 损坏 + gzip 压缩支持）。
+    #【改造注释】先写入 xxx.tmp 临时文件，完整无报错后原子替换原缓存文件，
+    避免 Ctrl+C 中断导致 JSON 截断损坏。支持 --compress-cache 输出 .gz 压缩包。
     """
     try:
         items = [(k, v) for k, v in cache.items() if not k.startswith("_")]
+        # 【改造】过滤掉 frames_pil 等不可序列化的大对象
+        for k, v in items:
+            if isinstance(v, dict) and "frames_pil" in v:
+                v.pop("frames_pil", None)
         meta = {k: v for k, v in cache.items() if k.startswith("_")}
         meta["_version"] = CACHE_VERSION
 
+        os.makedirs(os.path.dirname(cache_path) or ".", exist_ok=True)
+
         if len(items) <= chunk_size:
-            os.makedirs(os.path.dirname(cache_path) or ".", exist_ok=True)
             full = dict(meta)
             full.update(dict(items))
-            with open(cache_path, "w", encoding="utf-8") as f:
-                json.dump(full, f, ensure_ascii=False, indent=2)
+            # 【改造】原子写入：先写 .tmp 再 rename
+            tmp_path = cache_path + ".tmp"
+            json_data = json.dumps(full, ensure_ascii=False, indent=2, default=str)
+            if compress:
+                import gzip
+                gz_path = cache_path + ".gz"
+                tmp_gz = gz_path + ".tmp"
+                with gzip.open(tmp_gz, "wt", encoding="utf-8") as f:
+                    f.write(json_data)
+                os.replace(tmp_gz, gz_path)
+                # 清理未压缩版本
+                if os.path.exists(cache_path):
+                    os.remove(cache_path)
+            else:
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    f.write(json_data)
+                os.replace(tmp_path, cache_path)
             return
 
         # 分块存储
         base = os.path.splitext(cache_path)[0]
         for old in Path(cache_path).parent.glob(os.path.basename(base) + "_part*.json"):
-            old.unlink()
+            try:
+                old.unlink()
+            except OSError:
+                pass
 
         for i in range(0, len(items), chunk_size):
             chunk = dict(items[i:i + chunk_size])
             part_path = f"{base}_part{i // chunk_size + 1}.json"
             part_data = dict(meta)
             part_data.update(chunk)
-            with open(part_path, "w", encoding="utf-8") as f:
-                json.dump(part_data, f, ensure_ascii=False, indent=2)
+            # 【改造】每个分片也用原子写入
+            tmp_part = part_path + ".tmp"
+            with open(tmp_part, "w", encoding="utf-8") as f:
+                json.dump(part_data, f, ensure_ascii=False, indent=2, default=str)
+            os.replace(tmp_part, part_path)
 
-        # 写主索引
+        # 写主索引（原子写入）
         meta["_chunks"] = (len(items) + chunk_size - 1) // chunk_size
-        with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump(meta, f, ensure_ascii=False, indent=2)
+        tmp_main = cache_path + ".tmp"
+        with open(tmp_main, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2, default=str)
+        os.replace(tmp_main, cache_path)
 
     except (IOError, OSError) as e:
         log(f"  [警告] 缓存保存失败: {e}")
@@ -858,15 +1396,24 @@ def save_scan_progress(scanned_dirs: set, output_dir: str):
         pass
 
 def load_scan_progress(output_dir: str) -> set:
-    """加载扫描进度（v2.3 新增：断点续扫机制）"""
+    """加载扫描进度（v2.3 新增：断点续扫机制，v2.4 新增：30天过期自动清理）"""
     progress_path = os.path.join(output_dir, SCAN_PROGRESS_FILE)
     if not os.path.exists(progress_path):
         return set()
     try:
+        # 【改造 v2.4】超过30天未使用的进度文件自动删除，避免目录堆积
+        file_age = time.time() - os.path.getmtime(progress_path)
+        if file_age > 30 * 86400:
+            try:
+                os.remove(progress_path)
+                log(f"  [进度] 清理过期进度文件（{file_age/86400:.0f}天未使用）")
+            except OSError:
+                pass
+            return set()
         with open(progress_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         return set(data.get("scanned_dirs", []))
-    except (json.JSONDecodeError, IOError):
+    except (json.JSONDecodeError, IOError, OSError):
         return set()
 
 def clear_scan_progress(output_dir: str):
@@ -1037,10 +1584,11 @@ def _extract_audio_hash(video_path: str, num_samples: int = 5) -> Optional[list]
 
 def _extract_hashes_single(
     video_path: str, num_frames: int, double_check: bool = False,
-    use_audio: bool = False,
+    use_audio: bool = False, store_frames: bool = True,
 ) -> tuple[Optional[dict], Optional[str]]:
     """
     单视频哈希提取（v2.3 增强：超大视频分段抽帧防内存溢出）。
+    v2.4 新增 store_frames 参数：--no-store-frames 时不保留 PIL 帧降低内存占用。
     返回 (hash_dict或None, 错误类型或None)
     hash_dict = {"phash": [hash_obj,...], "dhash": [hash_obj,...],
                  "duration": float, "width": int, "height": int,
@@ -1147,7 +1695,8 @@ def _extract_hashes_single(
             "height": height,
             "fps": fps,
             "audio": audio_hashes,
-            "frames_pil": frames_pil if frames_pil else None,  # v2.3 新增
+            # 【改造 v2.4】--no-store-frames 时不保留 PIL 帧，降低内存占用
+            "frames_pil": (frames_pil if frames_pil else None) if store_frames else None,
         }, None
 
     except PermissionError:
@@ -1184,6 +1733,8 @@ def extract_hashes_with_cache(
     double_check = args.double_check
     use_audio = getattr(args, "audio_check", False)
     incremental = args.incremental
+    # 【改造 v2.4】--no-store-frames 不将预览帧持久化存入缓存，仅运行时临时复用降低内存占用
+    store_frames = not getattr(args, "no_store_frames", False)
 
     # 缓存判定
     for i, file_info in enumerate(mp4_files):
@@ -1220,14 +1771,15 @@ def extract_hashes_with_cache(
     mem_limit = getattr(args, "mem_limit", 0)
 
     if TQDM_AVAILABLE:
-        pbar = _tqdm(total=total, desc="提取哈希", unit="视频", ncols=80)
+        # 【改造 v2.4】mininterval=1.0 节流刷新，降低机械硬盘IO阻塞
+        pbar = _tqdm(total=total, desc="提取哈希", unit="视频", ncols=80, mininterval=1.0)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_idx = {}
         for idx, file_info in to_compute.items():
             future = executor.submit(
                 _extract_hashes_single, file_info["path"],
-                num_frames, double_check, use_audio,
+                num_frames, double_check, use_audio, store_frames,
             )
             future_to_idx[future] = (idx, file_info)
 
@@ -1273,20 +1825,20 @@ def extract_hashes_with_cache(
                 pct = completed / total * 100
                 log(f"  哈希进度: {completed}/{total} ({pct:.0f}%){extra}", "\r")
 
-            # 分批内存管控
-            if mem_limit > 0 and completed % 10 == 0:
-                mem = _get_memory_usage()
-                if mem:
-                    try:
-                        mem_val = float(mem.replace(" MB", ""))
-                        if mem_val > mem_limit:
-                            save_cache(cache_path, cache)
-                            log(f"  [内存管控] 已达 {mem}，强制落地缓存")
-                    except ValueError:
-                        pass
+            # 【改造 v2.4】缓存落地动态阈值：内存占用低于阈值每50条写缓存，内存超限立刻落地
+            current_mem_mb = 0.0
+            if mem_info:
+                try:
+                    current_mem_mb = float(mem_info.replace(" MB", ""))
+                except ValueError:
+                    pass
 
-            # 每 10 个保存一次缓存
-            if use_cache and completed % 10 == 0:
+            # 内存超限立即落地
+            if mem_limit > 0 and current_mem_mb > mem_limit:
+                save_cache(cache_path, cache)
+                log(f"  [内存管控] 已达 {mem_info}，强制落地缓存")
+            # 正常情况每50条写一次（降低磁盘IO）
+            elif use_cache and completed % 50 == 0:
                 save_cache(cache_path, cache)
 
     if TQDM_AVAILABLE:
@@ -1302,12 +1854,22 @@ def extract_hashes_with_cache(
 # ============================================================
 # 模块 6：视频相似度比对（时长预筛 + LSH + double-check）
 # ============================================================
-def compute_similarity(hash_dict1: dict, hash_dict2: dict) -> dict:
+def compute_similarity(hash_dict1: dict, hash_dict2: dict,
+                       weights: dict = None) -> dict:
     """
-    双哈希融合相似度计算：pHash(0.7) + dHash(0.3) + 音频辅助。
+    双哈希融合相似度计算（v2.4 修复：音频惩罚逻辑 + 自定义权重配置）。
+    #【改造注释】音频惩罚仅当两段视频都存在音频哈希时才执行0.8折扣；
+    任意一方无音频/静音不扣分，避免画面完全一致仅无音频判定不相似。
+    权重支持配置文件自定义 phash_weight/dhash_weight/audio_weight。
     """
     if not hash_dict1 or not hash_dict2:
         return {"distance": 1.0, "similarity": 0.0}
+
+    # 【改造】自定义权重，替代硬编码 0.7/0.3
+    w = weights or {}
+    phash_w = w.get("phash_weight", 0.7)
+    dhash_w = w.get("dhash_weight", 0.3)
+    audio_w = w.get("audio_weight", 0.8)  # 音频惩罚折扣系数
 
     # 时长预筛
     dur1 = hash_dict1.get("duration", 0)
@@ -1327,22 +1889,24 @@ def compute_similarity(hash_dict1: dict, hash_dict2: dict) -> dict:
     dhash_list2 = hash_dict2.get("dhash", [])
     dhash_sim = _hash_list_similarity(dhash_list1, dhash_list2)
 
-    # 加权融合
-    if phash_list1 and dhash_list1:
-        similarity = 0.7 * phash_sim + 0.3 * dhash_sim
+    # 加权融合（使用配置权重）
+    total_w = phash_w + dhash_w
+    if phash_list1 and dhash_list1 and total_w > 0:
+        similarity = (phash_w * phash_sim + dhash_w * dhash_sim) / total_w
     elif phash_list1:
         similarity = phash_sim
     else:
         similarity = dhash_sim
 
-    # 音频辅助（如可用）
+    # 【改造修复】音频辅助：仅当两段视频都存在音频哈希时才执行惩罚
     audio1 = hash_dict1.get("audio")
     audio2 = hash_dict2.get("audio")
     if audio1 and audio2:
         audio_sim = _hash_list_similarity(audio1, audio2)
-        # 音频相似度低于0.3时给予惩罚
+        # 音频相似度低于0.3时给予惩罚（仅双方都有音频时）
         if audio_sim < 0.3:
-            similarity *= 0.8
+            similarity *= audio_w
+    # 【改造】任意一方无音频/静音不扣分，保持画面相似度判定
 
     similarity = max(0.0, min(1.0, similarity))
     distance = 1.0 - similarity
@@ -1364,19 +1928,26 @@ def _hash_list_similarity(list1: list, list2: list) -> float:
 
 def _build_lsh_buckets(video_hashes: dict, num_buckets: int) -> dict:
     """
-    构建 LSH 分桶索引：将视频按哈希前缀分桶，快速缩小比对范围。
+    构建 LSH 分桶索引（v2.4 修复：废弃字符串切片，改用位掩码均匀分桶）。
+    #【改造注释】旧方案 str(ph)[:bucket_bits] 导致大量视频挤入同一桶，比对速度暴跌。
+    新方案将 pHash 转为 int 后用位掩码取模分桶，保证均匀分布。
     """
     buckets = defaultdict(list)
     for idx, hash_dict in video_hashes.items():
         phash_list = hash_dict.get("phash", [])
         if phash_list:
-            # 取第一个 pHash 的前 N 位作为桶键
-            ph = phash_list[0]
-            bucket_bits = max(1, int(64 / num_buckets))
-            bucket_key = str(ph)[:bucket_bits]
+            # 【改造】将 pHash 字符串转为 int，用位掩码均匀分桶
+            ph_str = str(phash_list[0])
+            try:
+                # imagehash 的 hex 字符串转 int
+                ph_int = int(ph_str, 16) if all(c in '0123456789abcdef' for c in ph_str.lower()) else hash(ph_str)
+            except (ValueError, TypeError):
+                ph_int = hash(ph_str)
+            # 位掩码取模分桶，确保均匀分布
+            bucket_key = ph_int % num_buckets
             buckets[bucket_key].append(idx)
         else:
-            buckets[f"__empty__"].append(idx)
+            buckets["__empty__"].append(idx)
     return buckets
 
 
@@ -1386,9 +1957,12 @@ def find_similar_pairs(
     threshold: float,
     skip_pairs: Optional[set] = None,
     lsh_buckets: int = 0,
+    weights: dict = None,
 ) -> list[dict]:
     """
     两两比对。支持 LSH 加速和预筛跳过。
+    v2.4 优化：LSH空桶直接跳过比对；时长差异0.2阈值视频提前剔除，不进入双重循环；
+    支持 config.ini 自定义权重传入。
     """
     keys = sorted(video_hashes.keys())
     n = len(keys)
@@ -1396,6 +1970,21 @@ def find_similar_pairs(
     compared = 0
     similar_pairs = []
     skipped_count = 0
+
+    # 【改造 v2.4】时长预筛：构建时长索引，差异>0.2的视频对直接剔除
+    duration_skip_count = 0
+
+    def _duration_too_different(idxa: int, idxb: int) -> bool:
+        """时长差异>20%直接判定不相似，跳过哈希计算"""
+        ha = video_hashes.get(idxa, {})
+        hb = video_hashes.get(idxb, {})
+        d1 = ha.get("duration", 0)
+        d2 = hb.get("duration", 0)
+        if d1 > 0 and d2 > 0:
+            diff = abs(d1 - d2) / max(d1, d2)
+            if diff > 0.2:
+                return True
+        return False
 
     log(f"开始两两比对，共 {total_pairs} 对视频...")
     if skip_pairs:
@@ -1405,59 +1994,124 @@ def find_similar_pairs(
     use_lsh = lsh_buckets > 0 and n > 50
     if use_lsh:
         buckets = _build_lsh_buckets(video_hashes, lsh_buckets)
-        log(f"  LSH 分桶: {len(buckets)} 个桶")
+        # 【改造 v2.4】统计空桶数量并跳过
+        empty_buckets = sum(1 for v in buckets.values() if not v)
+        valid_buckets = sum(1 for v in buckets.values() if v)
+        log(f"  LSH 分桶: {valid_buckets} 个有效桶，{empty_buckets} 个空桶（已跳过）")
+        # 计算实际需要比对的对数（仅桶内两两）
+        actual_pairs = sum(len(v) * (len(v) - 1) // 2 for v in buckets.values() if len(v) > 1)
+        log(f"  LSH 优化: 实际比对 {actual_pairs} 对（原 {total_pairs} 对，节省 {max(0, total_pairs-actual_pairs)} 对）")
+        total_pairs = max(total_pairs, actual_pairs)
 
     if TQDM_AVAILABLE:
-        pbar = _tqdm(total=total_pairs, desc="比对相似度", unit="对", ncols=80)
+        # 【改造 v2.4】mininterval=1.0 节流刷新，降低机械硬盘IO阻塞
+        pbar = _tqdm(total=total_pairs, desc="比对相似度", unit="对", ncols=80, mininterval=1.0)
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            idx_a, idx_b = keys[i], keys[j]
+    # 【改造 v2.4】LSH 模式下仅桶内两两比对；非 LSH 模式全量两两
+    if use_lsh:
+        for bucket_key, bucket_indices in buckets.items():
+            # 【改造 v2.4】空桶直接跳过比对
+            if not bucket_indices or len(bucket_indices) < 2:
+                continue
+            # 桶内两两比对
+            bn = len(bucket_indices)
+            for i in range(bn):
+                for j in range(i + 1, bn):
+                    idx_a, idx_b = bucket_indices[i], bucket_indices[j]
+                    pair_key = (min(idx_a, idx_b), max(idx_a, idx_b))
+                    if skip_pairs and pair_key in skip_pairs:
+                        compared += 1
+                        skipped_count += 1
+                        if TQDM_AVAILABLE:
+                            pbar.update(1)
+                        continue
+                    # 时长预筛
+                    if _duration_too_different(idx_a, idx_b):
+                        duration_skip_count += 1
+                        compared += 1
+                        if TQDM_AVAILABLE:
+                            pbar.update(1)
+                        continue
+                    hashes_a = video_hashes[idx_a]
+                    hashes_b = video_hashes[idx_b]
+                    if not hashes_a or not hashes_b:
+                        compared += 1
+                        if TQDM_AVAILABLE:
+                            pbar.update(1)
+                        continue
+                    result = compute_similarity(hashes_a, hashes_b, weights=weights)
+                    compared += 1
+                    if TQDM_AVAILABLE:
+                        pbar.update(1)
+                    if result["similarity"] >= threshold:
+                        similar_pairs.append({
+                            "idx_a": idx_a, "idx_b": idx_b,
+                            "name_a": mp4_files[idx_a]["name"],
+                            "name_b": mp4_files[idx_b]["name"],
+                            "path_a": mp4_files[idx_a]["path"],
+                            "path_b": mp4_files[idx_b]["path"],
+                            "distance": result["distance"],
+                            "similarity": result["similarity"],
+                        })
+    else:
+        for i in range(n):
+            for j in range(i + 1, n):
+                idx_a, idx_b = keys[i], keys[j]
 
-            # 预筛跳过
-            pair_key = (min(idx_a, idx_b), max(idx_a, idx_b))
-            if skip_pairs and pair_key in skip_pairs:
+                # 预筛跳过
+                pair_key = (min(idx_a, idx_b), max(idx_a, idx_b))
+                if skip_pairs and pair_key in skip_pairs:
+                    compared += 1
+                    skipped_count += 1
+                    if TQDM_AVAILABLE:
+                        pbar.update(1)
+                    continue
+
+                # 【改造 v2.4】时长预筛
+                if _duration_too_different(idx_a, idx_b):
+                    duration_skip_count += 1
+                    compared += 1
+                    if TQDM_AVAILABLE:
+                        pbar.update(1)
+                    continue
+
+                hashes_a = video_hashes[idx_a]
+                hashes_b = video_hashes[idx_b]
+
+                if not hashes_a or not hashes_b:
+                    compared += 1
+                    if TQDM_AVAILABLE:
+                        pbar.update(1)
+                    continue
+
+                result = compute_similarity(hashes_a, hashes_b, weights=weights)
                 compared += 1
-                skipped_count += 1
+
                 if TQDM_AVAILABLE:
                     pbar.update(1)
-                continue
+                else:
+                    pct = compared / total_pairs * 100
+                    log(f"  比对进度: {compared}/{total_pairs} ({pct:.1f}%)", "\r")
 
-            hashes_a = video_hashes[idx_a]
-            hashes_b = video_hashes[idx_b]
-
-            if not hashes_a or not hashes_b:
-                compared += 1
-                if TQDM_AVAILABLE:
-                    pbar.update(1)
-                continue
-
-            result = compute_similarity(hashes_a, hashes_b)
-            compared += 1
-
-            if TQDM_AVAILABLE:
-                pbar.update(1)
-            else:
-                pct = compared / total_pairs * 100
-                log(f"  比对进度: {compared}/{total_pairs} ({pct:.1f}%)", "\r")
-
-            if result["similarity"] >= threshold:
-                similar_pairs.append({
-                    "idx_a": idx_a,
-                    "idx_b": idx_b,
-                    "name_a": mp4_files[idx_a]["name"],
-                    "name_b": mp4_files[idx_b]["name"],
-                    "path_a": mp4_files[idx_a]["path"],
-                    "path_b": mp4_files[idx_b]["path"],
-                    "distance": result["distance"],
-                    "similarity": result["similarity"],
-                })
+                if result["similarity"] >= threshold:
+                    similar_pairs.append({
+                        "idx_a": idx_a,
+                        "idx_b": idx_b,
+                        "name_a": mp4_files[idx_a]["name"],
+                        "name_b": mp4_files[idx_b]["name"],
+                        "path_a": mp4_files[idx_a]["path"],
+                        "path_b": mp4_files[idx_b]["path"],
+                        "distance": result["distance"],
+                        "similarity": result["similarity"],
+                    })
 
     if TQDM_AVAILABLE:
         pbar.close()
     log("")
     if skipped_count > 0:
         log(f"  已跳过 {skipped_count} 对预筛匹配")
+    if duration_skip_count > 0:
+        log(f"  时长预筛剔除 {duration_skip_count} 对（差异>20%）")
 
     return similar_pairs
 
@@ -1586,6 +2240,59 @@ def _select_retain(
 # ============================================================
 # 模块 8：结果导出
 # ============================================================
+def _atomic_write_text(file_path: str, content: str, encoding: str = "utf-8"):
+    """
+    原子写入文本文件（v2.4 新增）。
+    #【改造注释】所有导出文件先写入 xxx.tmp，完整无报错后 os.replace 原子替换，
+    防止中途断电/中断生成损坏半截文件。
+    """
+    tmp_path = file_path + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding=encoding) as f:
+            f.write(content)
+        os.replace(tmp_path, file_path)
+    except (IOError, OSError) as e:
+        # 清理残留 tmp
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+        raise e
+
+
+def _atomic_write_lines(file_path: str, lines: list, encoding: str = "utf-8",
+                        newline: str = ""):
+    """
+    原子写入多行文本（v2.4 新增）。
+    适配 open(..., "w") 的 writelines 调用风格。
+    """
+    tmp_path = file_path + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding=encoding, newline=newline) as f:
+            f.writelines(lines)
+        os.replace(tmp_path, file_path)
+    except (IOError, OSError) as e:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+        raise e
+
+
+def _prefixed_path(output_dir: str, filename: str, prefix: str = "") -> str:
+    """
+    构造带前缀的输出文件路径（v2.4 新增 --output-prefix）。
+    多批次扫描不覆盖报告，prefix 为空时返回原路径。
+    """
+    if not prefix:
+        return os.path.join(output_dir, filename)
+    # 在文件名主名前加前缀，保留扩展名
+    base, ext = os.path.splitext(filename)
+    return os.path.join(output_dir, f"{prefix}{base}{ext}")
+
+
 def export_csv(similar_pairs: list[dict], csv_path: str, threshold: float,
                semantic_data: dict = None, lite_csv: bool = False):
     """导出比对明细 CSV（v2.2 扩展语义标签列，v2.3 新增 lite_csv 轻量模式）"""
@@ -1762,9 +2469,52 @@ def export_groups_md(groups: list[dict], mp4_files: list[dict], md_path: str,
         log(f"[错误] MD 导出失败: {e}")
 
 
+def _extract_video_thumbnail_base64(video_path: str, max_size: int = 160) -> str:
+    """
+    提取视频首帧并转为 base64 缩略图（v2.4 新增 HTML 缩略图预览）。
+    返回 data URI 字符串，失败返回空字符串。
+    """
+    cap = None
+    try:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return ""
+        # 跳过开头10%，取相对稳定帧
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(total * 0.1)))
+        ret, frame = cap.read()
+        if not ret or frame is None:
+            return ""
+        # 缩放到 max_size 宽度
+        h, w = frame.shape[:2]
+        if w > max_size:
+            scale = max_size / w
+            frame = cv2.resize(frame, (max_size, int(h * scale)),
+                               interpolation=cv2.INTER_AREA)
+        # 转 JPEG base64
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        if not ok:
+            return ""
+        b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+        return f"data:image/jpeg;base64,{b64}"
+    except Exception:
+        return ""
+    finally:
+        if cap is not None:
+            try:
+                cap.release()
+            except Exception:
+                pass
+
+
 def export_groups_html(groups: list[dict], mp4_files: list[dict], html_path: str,
-                        threshold: float, min_sim: float = 0.0, semantic_data: dict = None):
-    """导出 HTML 可视化报告（v2.2 扩展语义标签）"""
+                        threshold: float, min_sim: float = 0.0, semantic_data: dict = None,
+                        video_hashes: dict = None):
+    """
+    导出 HTML 可视化报告（v2.2 扩展语义标签，v2.4 新增首帧缩略图预览）。
+    #【改造注释】重复分组 HTML 报告内嵌视频首帧 base64 缩略图，直观对比相似画面。
+    """
     try:
         filtered = []
         for g in groups:
@@ -1797,13 +2547,15 @@ def export_groups_html(groups: list[dict], mp4_files: list[dict], html_path: str
             ".video{display:flex;align-items:center;padding:8px;border-bottom:1px solid #eee}",
             ".video:last-child{border-bottom:none}",
             ".badge{padding:2px 8px;border-radius:4px;font-size:12px;margin-left:10px}",
-            ".retain{background:#4CAF50;color:#white}",
-            ".clean{background:#f44336;color:#white}",
+            ".retain{background:#4CAF50;color:#fff}",
+            ".clean{background:#f44336;color:#fff}",
             ".stats{background:#fff;padding:15px;border-radius:8px;margin:15px 0}",
             ".summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}",
             ".summary div{background:#f8f8f8;padding:10px;border-radius:4px;text-align:center}",
-            ".semantic-tag{background:#2196F3;color:#white;padding:2px 6px;border-radius:3px;font-size:11px;margin-left:5px}",
+            ".semantic-tag{background:#2196F3;color:#fff;padding:2px 6px;border-radius:3px;font-size:11px;margin-left:5px}",
             ".purpose-tag{background:#FF9800;color:white;padding:2px 6px;border-radius:3px;font-size:11px;margin-left:5px}",
+            ".thumb{width:80px;height:60px;object-fit:cover;border-radius:4px;margin-right:10px;border:1px solid #ddd}",
+            ".thumb-placeholder{width:80px;height:60px;background:#eee;border-radius:4px;margin-right:10px;display:flex;align-items:center;justify-content:center;color:#999;font-size:11px}",
             "</style>\n</head>\n<body>\n",
             f"<h1>MP4 相似视频分组报告</h1>\n",
             f"<div class='stats'><div class='summary'>",
@@ -1822,6 +2574,9 @@ def export_groups_html(groups: list[dict], mp4_files: list[dict], html_path: str
                 html_parts.append(f"<div><h3>{count}</h3><p>{purpose}</p></div>")
             html_parts.append("</div></div>\n")
 
+        # 【改造 v2.4】缩略图缓存，避免同组重复提取
+        thumb_cache = {}
+
         for gi, group in enumerate(filtered, 1):
             html_parts.append(f"<div class='group'><h2>第 {gi} 组</h2>\n")
             for fi, (idx, info) in enumerate(group["members"]):
@@ -1837,8 +2592,21 @@ def export_groups_html(groups: list[dict], mp4_files: list[dict], html_path: str
                         )
                     if sd.get("dataset_purpose"):
                         extra_tags += f"<span class='purpose-tag'>{sd['dataset_purpose']}</span>"
+
+                # 【改造 v2.4】提取首帧缩略图（带缓存）
+                thumb_html = ""
+                path = info["path"]
+                if path not in thumb_cache:
+                    thumb_cache[path] = _extract_video_thumbnail_base64(path)
+                thumb_b64 = thumb_cache[path]
+                if thumb_b64:
+                    thumb_html = f"<img class='thumb' src='{thumb_b64}' alt='缩略图'>"
+                else:
+                    thumb_html = "<div class='thumb-placeholder'>无预览</div>"
+
                 html_parts.append(
                     f"<div class='video'>"
+                    f"{thumb_html}"
                     f"<span>{fi + 1}. <b>{info['name']}</b></span>"
                     f"<span style='margin-left:auto'>{info['size_readable']}</span>"
                     f"<span class='badge {mark}'>{text}</span>"
@@ -1849,25 +2617,153 @@ def export_groups_html(groups: list[dict], mp4_files: list[dict], html_path: str
 
         html_parts.append("</body>\n</html>")
 
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.writelines(html_parts)
+        _atomic_write_text(html_path, "".join(html_parts))
         log(f"[导出] HTML 报告 → {html_path}")
     except (IOError, OSError) as e:
         log(f"[错误] HTML 导出失败: {e}")
 
 
+def export_groups_xlsx(similar_pairs: list[dict], groups: list[dict],
+                       mp4_files: list[dict], xlsx_path: str,
+                       threshold: float, min_sim: float = 0.0,
+                       semantic_data: dict = None):
+    """
+    导出 Excel 格式重复报告（v2.4 新增）。
+    #【改造注释】依赖 openpyxl 可选库，缺失时给出精准 pip 安装命令。
+    包含两个工作表：比对明细、分组汇总。
+    """
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment
+    except ImportError:
+        log("[错误] Excel 导出需要 openpyxl 库，请安装：")
+        log("  pip install openpyxl")
+        log("  或使用国内镜像: pip install openpyxl -i https://pypi.tuna.tsinghua.edu.cn/simple")
+        return
+
+    try:
+        wb = Workbook()
+
+        # 工作表1：比对明细
+        ws1 = wb.active
+        ws1.title = "比对明细"
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        headers = ["视频A", "视频B", "相似度", "距离", "是否重复"]
+        if semantic_data:
+            headers.extend(["A用途", "B用途"])
+        ws1.append(headers)
+        for col in range(1, len(headers) + 1):
+            cell = ws1.cell(row=1, column=col)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center")
+
+        for pair in similar_pairs:
+            is_dup = "是" if pair["similarity"] >= threshold else "否"
+            row = [pair["name_a"], pair["name_b"],
+                   round(pair["similarity"], 4), round(pair["distance"], 6), is_dup]
+            if semantic_data:
+                sd_a = semantic_data.get(pair["path_a"], {})
+                sd_b = semantic_data.get(pair["path_b"], {})
+                row.append(sd_a.get("dataset_purpose", "-"))
+                row.append(sd_b.get("dataset_purpose", "-"))
+            ws1.append(row)
+
+        # 工作表2：分组汇总
+        ws2 = wb.create_sheet("分组汇总")
+        headers2 = ["分组", "视频名", "路径", "大小", "建议", "相似度"]
+        if semantic_data:
+            headers2.extend(["场景", "用途"])
+        ws2.append(headers2)
+        for col in range(1, len(headers2) + 1):
+            cell = ws2.cell(row=1, column=col)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center")
+
+        retain_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+        clean_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+
+        for gi, group in enumerate(groups, 1):
+            max_sim = max(group["similarities"].values()) if group["similarities"] else 1.0
+            if max_sim < min_sim:
+                continue
+            for idx, info in group["members"]:
+                is_retain = idx == group["retain_idx"]
+                mark = "保留" if is_retain else "清理"
+                row = [f"第{gi}组", info["name"], info["path"],
+                       info["size_readable"], mark, f"{max_sim:.2%}"]
+                if semantic_data:
+                    sd = semantic_data.get(info["path"], {})
+                    row.append(", ".join(sd.get("scene_tags", [])[:2]) or "-")
+                    row.append(sd.get("dataset_purpose", "-") or "-")
+                ws2.append(row)
+                # 着色
+                fill = retain_fill if is_retain else clean_fill
+                for col in range(1, len(headers2) + 1):
+                    ws2.cell(row=ws2.max_row, column=col).fill = fill
+
+        # 调整列宽
+        for ws in [ws1, ws2]:
+            for col_cells in ws.columns:
+                max_len = max(len(str(c.value or "")) for c in col_cells)
+                ws.column_dimensions[col_cells[0].column_letter].width = min(max_len + 2, 60)
+
+        wb.save(xlsx_path)
+        log(f"[导出] Excel 报告 → {xlsx_path}")
+    except Exception as e:
+        log(f"[错误] Excel 导出失败: {e}")
+
+
 def export_paths_list(groups: list[dict], mp4_files: list[dict], paths_path: str):
     """导出纯路径清单"""
     try:
-        with open(paths_path, "w", encoding="utf-8") as f:
-            for gi, group in enumerate(groups, 1):
-                f.write(f"# 第 {gi} 组\n")
-                for idx, info in group["members"]:
-                    f.write(f"{info['path']}\n")
-                f.write("\n")
+        buf = io.StringIO()
+        for gi, group in enumerate(groups, 1):
+            buf.write(f"# 第 {gi} 组\n")
+            for idx, info in group["members"]:
+                buf.write(f"{info['path']}\n")
+            buf.write("\n")
+        _atomic_write_text(paths_path, buf.getvalue())
         log(f"[导出] 路径清单 → {paths_path}")
     except (IOError, OSError) as e:
         log(f"[错误] 路径清单导出失败: {e}")
+
+
+def export_clean_list(groups: list[dict], mp4_files: list[dict],
+                      clean_list_path: str, path_mask: bool = False):
+    """
+    导出仅待清理视频路径清单（v2.4 新增）。
+    不含保留素材，仅列出建议清理的视频路径，便于外部脚本批量处理。
+    """
+    try:
+        # 【改造 v2.4】路径脱敏处理
+        def _mask(p: str) -> str:
+            if not path_mask or not p:
+                return p
+            parts = p.replace("\\", "/").split("/")
+            if len(parts) <= 4:
+                return p
+            return parts[0] + "//.../" + "/".join(parts[-2:])
+
+        buf = io.StringIO()
+        buf.write(f"# 待清理视频路径清单\n")
+        buf.write(f"# 生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        total_clean = 0
+        for gi, group in enumerate(groups, 1):
+            retain_name = mp4_files[group["retain_idx"]]["name"]
+            buf.write(f"# 第{gi}组 (保留: {retain_name})\n")
+            for idx, info in group["members"]:
+                if idx != group["retain_idx"]:
+                    buf.write(f"{_mask(info['path'])}\n")
+                    total_clean += 1
+            buf.write("\n")
+        buf.write(f"# 共 {total_clean} 个待清理视频\n")
+        _atomic_write_text(clean_list_path, buf.getvalue())
+        log(f"[导出] 清理清单 → {clean_list_path} ({total_clean} 个)")
+    except (IOError, OSError) as e:
+        log(f"[错误] 清理清单导出失败: {e}")
 
 
 def export_bad_videos(bad_videos: list[dict], bad_path: str):
@@ -1928,10 +2824,12 @@ def generate_cleanup_script(
     output_dir: str, hard_delete: bool = False,
     protect_folders: set = None,
     backup_path: str = "", protect_file: str = "",
-    semantic_data: dict = None,
+    semantic_data: dict = None, path_mask: bool = False,
 ):
     """
     生成清理脚本（v2.3 增强：备份模式 + 批量保护目录 + 文件占用检测 + 用途备注）。
+    v2.4 修复：保护目录使用完整分隔符精准匹配，杜绝 video 误保护 video123；
+    新增 --path-mask 路径脱敏，审计日志隐藏中间层级保护素材隐私。
     默认：移动至回收站/垃圾桶（安全模式）。
     --hard-delete：永久删除。
     --backup-path：清理前先复制视频到备份目录。
@@ -1953,12 +2851,27 @@ def generate_cleanup_script(
         except (IOError, OSError):
             pass
 
+    # 【改造修复 v2.4】保护目录使用完整分隔符精准匹配
+    # 旧方案 startswith 会导致 video 误匹配 video123，新增 os.sep 边界检查
     def is_protected(path: str) -> bool:
-        path_lower = path.lower()
+        path_lower = path.lower().rstrip(os.sep)
         for pf in protect_folders:
-            if path_lower.startswith(pf.lower()):
+            pf_norm = _normalize_path(pf).lower().rstrip(os.sep)
+            if not pf_norm:
+                continue
+            # 精确匹配：路径等于保护目录，或以 保护目录+分隔符 开头
+            if path_lower == pf_norm or path_lower.startswith(pf_norm + os.sep):
                 return True
         return False
+
+    # 【改造 v2.4】路径脱敏：隐藏路径中间层级，仅保留首尾两级
+    def _mask_path(p: str) -> str:
+        if not path_mask or not p:
+            return p
+        parts = p.replace("\\", "/").split("/")
+        if len(parts) <= 4:
+            return p
+        return parts[0] + "//.../" + "/".join(parts[-2:])
 
     # v2.3 新增：获取用途备注
     def get_purpose_note(path: str) -> str:
@@ -1995,10 +2908,11 @@ def generate_cleanup_script(
                 if idx != group["retain_idx"]:
                     path = info["path"]
                     if is_protected(path):
-                        f.write(f"REM [已保护] {path}\r\n")
+                        f.write(f"REM [已保护] {_mask_path(path)}\r\n")
                         continue
                     note = get_purpose_note(path)
-                    f.write(f"echo   {path}{note}\r\n")
+                    # 【改造 v2.4】echo 显示行使用脱敏路径，实际操作行保留真实路径
+                    f.write(f"echo   {_mask_path(path)}{note}\r\n")
                     to_delete.append(path)
             f.write("\r\n")
 
@@ -2053,9 +2967,10 @@ def generate_cleanup_script(
                 if idx != group["retain_idx"]:
                     path = info["path"]
                     if is_protected(path):
-                        f.write(f"# [已保护] {path}\n")
+                        f.write(f"# [已保护] {_mask_path(path)}\n")
                         continue
-                    f.write(f'echo "  {path}"\n')
+                    # 【改造 v2.4】echo 显示行使用脱敏路径
+                    f.write(f'echo "  {_mask_path(path)}"\n')
                     to_delete.append(path)
             f.write("\n")
 
@@ -2085,38 +3000,60 @@ def generate_cleanup_script(
     log(f"[导出] 清理脚本 → {bat_path} / {sh_path}")
 
 
-def export_audit_log(output_dir: str, groups: list[dict], mp4_files: list[dict], hard_delete: bool, semantic_data: dict = None):
-    """导出清理操作审计日志（v2.2 扩展语义备注，v2.3 按日期分割文件）"""
+def export_audit_log(output_dir: str, groups: list[dict], mp4_files: list[dict],
+                     hard_delete: bool, semantic_data: dict = None,
+                     path_mask: bool = False):
+    """导出清理操作审计日志（v2.2 扩展语义备注，v2.3 按日期分割文件，v2.4 路径脱敏）"""
     try:
         # v2.3 新增：审计日志按日期分割，避免单文件无限膨胀
         date_str = time.strftime("%Y%m")
         audit_name = AUDIT_LOG.replace(".log", f"_{date_str}.log")
         audit_path = os.path.join(output_dir, audit_name)
-        with open(audit_path, "a", encoding="utf-8") as f:
-            f.write(f"\n{'=' * 60}\n")
-            f.write(f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"模式: {'永久删除' if hard_delete else '安全移动'}\n")
-            f.write(f"分组数: {len(groups)}\n")
-            for gi, group in enumerate(groups, 1):
-                f.write(f"\n第{gi}组:\n")
-                retain_info = mp4_files[group['retain_idx']]
-                f.write(f"  保留: {retain_info['path']}")
-                if semantic_data:
-                    sd = semantic_data.get(retain_info["path"], {})
-                    if sd.get("dataset_purpose"):
-                        f.write(f" ({sd['dataset_purpose']})")
-                f.write("\n")
-                for idx, info in group["members"]:
-                    if idx != group["retain_idx"]:
-                        f.write(f"  清理: {info['path']} ({info['size_readable']})")
-                        if semantic_data:
-                            sd = semantic_data.get(info["path"], {})
-                            if sd.get("dataset_purpose"):
-                                f.write(f" [{sd['dataset_purpose']}]")
-                        f.write("\n")
+
+        # 【改造 v2.4】路径脱敏处理
+        def _mask(p: str) -> str:
+            if not path_mask or not p:
+                return p
+            parts = p.replace("\\", "/").split("/")
+            if len(parts) <= 4:
+                return p
+            return parts[0] + "//.../" + "/".join(parts[-2:])
+
+        # 【改造 v2.4】原子写入审计日志
+        buf = io.StringIO()
+        buf.write(f"\n{'=' * 60}\n")
+        buf.write(f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        buf.write(f"模式: {'永久删除' if hard_delete else '安全移动'}\n")
+        buf.write(f"分组数: {len(groups)}\n")
+        for gi, group in enumerate(groups, 1):
+            buf.write(f"\n第{gi}组:\n")
+            retain_info = mp4_files[group['retain_idx']]
+            buf.write(f"  保留: {_mask(retain_info['path'])}")
+            if semantic_data:
+                sd = semantic_data.get(retain_info["path"], {})
+                if sd.get("dataset_purpose"):
+                    buf.write(f" ({sd['dataset_purpose']})")
+            buf.write("\n")
+            for idx, info in group["members"]:
+                if idx != group["retain_idx"]:
+                    buf.write(f"  清理: {_mask(info['path'])} ({info['size_readable']})")
+                    if semantic_data:
+                        sd = semantic_data.get(info["path"], {})
+                        if sd.get("dataset_purpose"):
+                            buf.write(f" [{sd['dataset_purpose']}]")
+                    buf.write("\n")
+        # 追加模式：先读后写（原子化追加）
+        existing = ""
+        if os.path.exists(audit_path):
+            try:
+                with open(audit_path, "r", encoding="utf-8") as fr:
+                    existing = fr.read()
+            except (IOError, OSError):
+                pass
+        _atomic_write_text(audit_path, existing + buf.getvalue())
         log(f"[导出] 审计日志 → {audit_path}")
-    except (IOError, OSError):
-        pass
+    except (IOError, OSError) as e:
+        log(f"[错误] 审计日志导出失败: {e}")
 
 
 def print_summary(
@@ -2724,6 +3661,31 @@ def _run_dataset_split(args):
     os.makedirs(split_base, exist_ok=True)
     catalog_lines = []
 
+    # 【改造 v2.4】--link-mode 硬链接模式，不重复复制视频节省磁盘
+    use_hardlink = getattr(args, "link_mode", False)
+    link_count = 0
+    copy_count = 0
+
+    def _place_file(src: str, dst: str) -> str:
+        """放置文件：硬链接优先，失败回退复制"""
+        nonlocal link_count, copy_count
+        if os.path.exists(dst):
+            return "skip"
+        if use_hardlink:
+            try:
+                os.link(src, dst)
+                link_count += 1
+                return "link"
+            except OSError:
+                # 硬链接失败（跨盘/权限），回退复制
+                shutil.copy2(src, dst)
+                copy_count += 1
+                return "copy"
+        else:
+            shutil.copy2(src, dst)
+            copy_count += 1
+            return "copy"
+
     for purpose, files in purpose_groups.items():
         # 清理用途名中的特殊字符作为文件夹名
         safe_name = purpose.replace("/", "_").replace("\\", "_").replace(":", "_")
@@ -2735,11 +3697,10 @@ def _run_dataset_split(args):
             src = file_info["path"]
             dst = os.path.join(purpose_dir, file_info["name"])
             try:
-                if not os.path.exists(dst):
-                    shutil.copy2(src, dst)
+                _place_file(src, dst)
                 catalog_lines.append(f"{purpose}\t{src}\t{dst}\t{file_info['size_readable']}")
             except (IOError, OSError) as e:
-                log(f"  [警告] 复制失败: {file_info['name']} - {e}")
+                log(f"  [警告] 放置失败: {file_info['name']} - {e}")
 
     # 未分类
     if no_purpose:
@@ -2750,11 +3711,13 @@ def _run_dataset_split(args):
             src = file_info["path"]
             dst = os.path.join(unknown_dir, file_info["name"])
             try:
-                if not os.path.exists(dst):
-                    shutil.copy2(src, dst)
+                _place_file(src, dst)
                 catalog_lines.append(f"未分类\t{src}\t{dst}\t{file_info['size_readable']}")
             except (IOError, OSError) as e:
-                log(f"  [警告] 复制失败: {file_info['name']} - {e}")
+                log(f"  [警告] 放置失败: {file_info['name']} - {e}")
+
+    if use_hardlink:
+        log(f"  [拆分] 硬链接 {link_count} 个，复制 {copy_count} 个（跨盘回退）", force=True)
 
     # 导出清单
     catalog_path = os.path.join(split_base, "split_catalog.txt")
@@ -2770,6 +3733,159 @@ def _run_dataset_split(args):
         pass
 
     log(f"\n完成！分类结果已保存至: {split_base}", force=True)
+
+
+# ============================================================
+# v2.4 新增子命令处理函数
+# ============================================================
+def _run_reload_labels(args):
+    """热加载标签配置文件（v2.4 新增）"""
+    log("重新加载 dataset_labels.ini 标签配置...", force=True)
+    labels = load_dataset_labels()
+    log(f"  场景标签: {len(labels['scene'])} 个", force=True)
+    log(f"  物体标签: {len(labels['object'])} 个", force=True)
+    log(f"  行为标签: {len(labels['action'])} 个", force=True)
+    log(f"  用途规则: {len(labels['purpose_rules'])} 条", force=True)
+    log("  标签配置已重新加载", force=True)
+
+
+def _run_test(args):
+    """内置测试子命令（v2.4 新增）：一键校验核心逻辑"""
+    log("=" * 60, force=True)
+    log("  内置核心逻辑测试", force=True)
+    log("=" * 60, force=True)
+
+    passed = 0
+    failed = 0
+
+    # 测试1: LSH分桶均匀性
+    try:
+        test_hashes = {i: {"phash": [f"{i:016x}"]} for i in range(100)}
+        buckets = _build_lsh_buckets(test_hashes, 32)
+        max_bucket = max(len(v) for v in buckets.values())
+        if max_bucket < 20:  # 均匀分布下每桶应<10
+            passed += 1
+            log("  [PASS] LSH分桶均匀性", force=True)
+        else:
+            failed += 1
+            log(f"  [FAIL] LSH分桶不均匀，最大桶 {max_bucket}", force=True)
+    except Exception as e:
+        failed += 1
+        log(f"  [FAIL] LSH测试异常: {e}", force=True)
+
+    # 测试2: 时长筛选解析
+    try:
+        conditions = parse_duration_filter(">=60&<=360")
+        assert len(conditions) == 2
+        assert conditions[0] == (">=", 60.0)
+        assert conditions[1] == ("<=", 360.0)
+        assert match_duration(120, conditions) == True
+        assert match_duration(30, conditions) == False
+        assert match_duration(400, conditions) == False
+        passed += 1
+        log("  [PASS] 时长筛选解析", force=True)
+    except Exception as e:
+        failed += 1
+        log(f"  [FAIL] 时长筛选异常: {e}", force=True)
+
+    # 测试3: 相似度计算
+    try:
+        h1 = {"phash": [imagehash.phash(Image.new("L", (32, 32), 128))],
+              "dhash": [imagehash.dhash(Image.new("L", (32, 32), 128))],
+              "duration": 10.0}
+        h2 = {"phash": [imagehash.phash(Image.new("L", (32, 32), 128))],
+              "dhash": [imagehash.dhash(Image.new("L", (32, 32), 128))],
+              "duration": 10.0}
+        result = compute_similarity(h1, h2)
+        assert result["similarity"] > 0.99
+        passed += 1
+        log(f"  [PASS] 相似度计算 (sim={result['similarity']:.4f})", force=True)
+    except Exception as e:
+        failed += 1
+        log(f"  [FAIL] 相似度计算异常: {e}", force=True)
+
+    # 测试4: 路径标准化
+    try:
+        p = _normalize_path("test.mp4")
+        assert len(p) > 0
+        passed += 1
+        log("  [PASS] 路径标准化", force=True)
+    except Exception as e:
+        failed += 1
+        log(f"  [FAIL] 路径标准化异常: {e}", force=True)
+
+    # 测试5: 缓存读写
+    try:
+        test_cache = {"_version": CACHE_VERSION, "test_path": {"size": 100, "mtime": 0}}
+        test_path = os.path.join(tempfile.gettempdir(), "test_cache_v24.json")
+        save_cache(test_path, test_cache)
+        loaded = load_cache(test_path)
+        assert loaded.get("_version") == CACHE_VERSION
+        assert "test_path" in loaded
+        os.remove(test_path)
+        passed += 1
+        log("  [PASS] 缓存读写", force=True)
+    except Exception as e:
+        failed += 1
+        log(f"  [FAIL] 缓存读写异常: {e}", force=True)
+
+    log(f"\n{'=' * 60}", force=True)
+    log(f"  测试结果: {passed} 通过 / {failed} 失败", force=True)
+    log(f"{'=' * 60}", force=True)
+
+
+def _run_gen_restore(args):
+    """根据审计日志生成恢复脚本（v2.4 新增）"""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    output_dir = _resolve_path(args.output_dir) if args.output_dir else script_dir
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 查找最新审计日志
+    import glob as glob_mod
+    audit_files = sorted(glob_mod.glob(os.path.join(output_dir, "cleanup_audit_*.log")))
+    if not audit_files:
+        audit_files = [os.path.join(output_dir, AUDIT_LOG)]
+    if not os.path.exists(audit_files[-1]):
+        log("错误: 未找到审计日志文件", force=True)
+        return
+
+    audit_path = audit_files[-1]
+    log(f"读取审计日志: {audit_path}", force=True)
+
+    restore_entries = []
+    try:
+        with open(audit_path, "r", encoding="utf-8") as f:
+            for line in f:
+                # 解析移动/删除记录
+                if "移动" in line or "删除" in line or "→" in line or "→" in line:
+                    parts = line.strip().split("\t")
+                    if len(parts) >= 2:
+                        restore_entries.append(parts)
+    except (IOError, OSError) as e:
+        log(f"错误: 读取审计日志失败: {e}", force=True)
+        return
+
+    if not restore_entries:
+        log("审计日志中未找到可恢复的记录", force=True)
+        return
+
+    # 生成恢复脚本
+    restore_bat = os.path.join(output_dir, "restore_duplicates.bat")
+    try:
+        with open(restore_bat, "w", encoding="utf-8") as f:
+            f.write("@echo off\r\nchcp 65001 >nul\r\n")
+            f.write(f"REM 恢复脚本生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\r\n")
+            f.write("echo 正在恢复视频文件...\r\n")
+            for entry in restore_entries:
+                if len(entry) >= 2:
+                    src = entry[0].strip()
+                    dst = entry[1].strip() if len(entry) > 1 else ""
+                    if dst:
+                        f.write(f'move "{dst}" "{src}" 2>nul\r\n')
+            f.write("echo 恢复完成！\r\npause\r\n")
+        log(f"[导出] 恢复脚本 → {restore_bat}", force=True)
+    except (IOError, OSError) as e:
+        log(f"错误: 生成恢复脚本失败: {e}")
 
 
 def main():
@@ -2857,6 +3973,38 @@ def main():
         _run_dataset_split(args)
         return
 
+    # ============ v2.4 新增子命令 ============
+    # --duration-stat
+    if cmd == "duration-stat":
+        _run_duration_stat(args)
+        return
+
+    # --reload-labels
+    if cmd == "reload-labels":
+        _run_reload_labels(args)
+        return
+
+    # --test
+    if cmd == "test":
+        _run_test(args)
+        return
+
+    # --gen-restore
+    if getattr(args, "gen_restore", False):
+        _run_gen_restore(args)
+        return
+
+    # v2.4 安全：--hard-delete 二次确认
+    if getattr(args, "hard_delete", False) and not _quiet_mode:
+        print("\n" + "=" * 60)
+        print("  [警告] --hard-delete 将生成永久删除脚本！")
+        print("  此操作不可逆，被删除的视频无法恢复。")
+        print("=" * 60)
+        confirm = input("  确认要生成永久删除脚本吗？(输入 YES 继续): ")
+        if confirm.strip().upper() != "YES":
+            print("  已取消永久删除脚本生成。")
+            return
+
     # ============ 正常扫描模式 ============
     folder_path = _resolve_path(args.dir)
     recursive = not args.no_recursive
@@ -2887,7 +4035,7 @@ def main():
     keep_strategy = _get_keep_strategy(args)
 
     log("=" * 60, force=True)
-    log("       MP4 视频相似度查重工具 v2.3", force=True)
+    log("       MP4 视频相似度查重工具 v2.4", force=True)
     log("=" * 60, force=True)
     log(f"  扫描目录:   {folder_path}", force=True)
     log(f"  递归子目录: {'是' if recursive else '否'}", force=True)
@@ -2935,6 +4083,20 @@ def main():
 
         log(f"  共找到 {len(mp4_files)} 个视频文件", force=True)
 
+        # 【改造 v2.4】步骤1.5：应用时长筛选 + 分辨率筛选（哈希提取前过滤）
+        duration_filter = getattr(args, "duration_filter", "")
+        min_res = getattr(args, "min_res", 0)
+        max_res = getattr(args, "max_res", 0)
+        if duration_filter or min_res > 0 or max_res > 0:
+            log("\n[步骤1.5] 应用时长/分辨率筛选...", force=True)
+            mp4_files, filter_stats = apply_duration_resolution_filter(
+                mp4_files, args, cache_path,
+            )
+            if not mp4_files:
+                log("筛选后无剩余视频，程序退出。", force=True)
+                _global_exit_code = EXIT_OK
+                return
+
         # 2. 提取哈希
         log("\n[步骤2] 提取感知哈希...", force=True)
         video_hashes, bad_videos, cache = extract_hashes_with_cache(
@@ -2960,16 +4122,28 @@ def main():
                     for i, sd in semantic_results.items():
                         if sd.get("dataset_purpose", "") in purposes:
                             filtered_indices.add(i)
-                    # 从 video_hashes 中过滤
-                    filtered_hashes = {}
-                    for idx, vh in video_hashes.items():
-                        if idx in filtered_indices:
-                            filtered_hashes[idx] = vh
-                    if len(filtered_hashes) < len(video_hashes):
-                        log(f"  用途筛选: {len(video_hashes)} → {len(filtered_hashes)} 个视频", force=True)
-                        video_hashes = filtered_hashes
+                    # 【改造修复 v2.4】同步截断 mp4_files 与 video_hashes，
+                    # 确保哈希比对、分组逻辑不再加载未符合用途的视频，筛选完全生效
+                    if len(filtered_indices) < len(video_hashes):
+                        log(f"  用途筛选: {len(video_hashes)} → {len(filtered_indices)} 个视频", force=True)
+                        video_hashes = {idx: vh for idx, vh in video_hashes.items()
+                                        if idx in filtered_indices}
+                        # 同步过滤语义结果，保持索引一致
+                        semantic_results = {idx: sd for idx, sd in semantic_results.items()
+                                            if idx in filtered_indices}
             else:
                 log("  [警告] CLIP 模型不可用，跳过语义分析", force=True)
+
+        # 【改造 v2.4】步骤2.6：应用 --skip-low-quality 过滤低质量视频
+        if getattr(args, "skip_low_quality", False) and semantic_results:
+            mp4_files, semantic_results, removed = apply_skip_low_quality(
+                mp4_files, semantic_results,
+            )
+            if removed > 0:
+                # 同步过滤 video_hashes
+                keep_idx = set(semantic_results.keys())
+                video_hashes = {idx: vh for idx, vh in video_hashes.items()
+                                if idx in keep_idx}
 
         # 3. 快速预筛
         meta_dups = []
@@ -2991,8 +4165,10 @@ def main():
         else:
             log("\n[步骤4] 视频相似度比对...", force=True)
             lsh = getattr(args, "lsh_buckets", 32)
+            # 【改造 v2.4】加载 config.ini 自定义权重
+            weights = load_weights_config(getattr(args, "config", None) or "")
             similar_pairs = find_similar_pairs(
-                video_hashes, mp4_files, threshold, skip_pairs, lsh
+                video_hashes, mp4_files, threshold, skip_pairs, lsh, weights=weights
             )
 
             # 元数据预筛对加入
@@ -3020,21 +4196,31 @@ def main():
                     semantic_data[mp4_files[i]["path"]] = sd
 
         if not dry_run:
-            csv_path = os.path.join(output_dir, RESULT_CSV)
-            group_path = os.path.join(output_dir, RESULT_GROUPS)
-            bad_path = os.path.join(output_dir, BAD_VIDEO_LIST)
-            paths_path = os.path.join(output_dir, RESULT_PATHS)
+            # 【改造 v2.4】--output-prefix 自定义输出文件前缀
+            _prefix = getattr(args, "output_prefix", "") or ""
+            _path_mask = getattr(args, "path_mask", False)
+
+            csv_path = _prefixed_path(output_dir, RESULT_CSV, _prefix)
+            group_path = _prefixed_path(output_dir, RESULT_GROUPS, _prefix)
+            bad_path = _prefixed_path(output_dir, BAD_VIDEO_LIST, _prefix)
+            paths_path = _prefixed_path(output_dir, RESULT_PATHS, _prefix)
 
             export_csv(similar_pairs, csv_path, threshold, semantic_data,
                        lite_csv=getattr(args, "lite_csv", False))
 
             fmt = args.format
             if fmt == "md":
-                md_path = os.path.join(output_dir, RESULT_GROUPS_MD)
+                md_path = _prefixed_path(output_dir, RESULT_GROUPS_MD, _prefix)
                 export_groups_md(groups, mp4_files, md_path, threshold, min_sim, semantic_data)
             elif fmt == "html":
-                html_path = os.path.join(output_dir, RESULT_GROUPS_HTML)
-                export_groups_html(groups, mp4_files, html_path, threshold, min_sim, semantic_data)
+                html_path = _prefixed_path(output_dir, RESULT_GROUPS_HTML, _prefix)
+                export_groups_html(groups, mp4_files, html_path, threshold, min_sim, semantic_data,
+                                   video_hashes=video_hashes)
+            elif fmt == "xlsx":
+                # 【改造 v2.4】Excel 导出支持
+                xlsx_path = _prefixed_path(output_dir, "similar_result.xlsx", _prefix)
+                export_groups_xlsx(similar_pairs, groups, mp4_files, xlsx_path,
+                                   threshold, min_sim, semantic_data)
             else:
                 export_groups_txt(groups, mp4_files, group_path, threshold, min_sim, semantic_data)
 
@@ -3045,8 +4231,13 @@ def main():
             if getattr(args, "export_bad_paths", False):
                 export_bad_paths(bad_videos, output_dir)
 
+            # 【改造 v2.4】--export-clean-list 仅待清理视频路径清单
+            if getattr(args, "export_clean_list", False) and groups:
+                clean_list_path = _prefixed_path(output_dir, CLEAN_LIST_FILE, _prefix)
+                export_clean_list(groups, mp4_files, clean_list_path, path_mask=_path_mask)
+
             if args.export_hash and video_hashes:
-                export_path = os.path.join(output_dir, HASH_EXPORT)
+                export_path = _prefixed_path(output_dir, HASH_EXPORT, _prefix)
                 export_hash_backup(video_hashes, mp4_files, export_path)
 
             if args.gen_cleanup and groups:
@@ -3056,20 +4247,22 @@ def main():
                     backup_path=getattr(args, "backup_path", ""),
                     protect_file=getattr(args, "protect_file", ""),
                     semantic_data=semantic_data if semantic_results else None,
+                    path_mask=_path_mask,
                 )
-                export_audit_log(output_dir, groups, mp4_files, args.hard_delete, semantic_data)
+                export_audit_log(output_dir, groups, mp4_files, args.hard_delete,
+                                 semantic_data, path_mask=_path_mask)
 
             # v2.2 AI 数据集导出
             if args.export_dataset and semantic_data:
                 log("\n[步骤5.5] 导出 AI 数据集文件...", force=True)
-                catalog_path = os.path.join(output_dir, DATASET_CATALOG)
+                catalog_path = _prefixed_path(output_dir, DATASET_CATALOG, _prefix)
                 export_dataset_catalog(semantic_data, catalog_path)
 
-                list_path = os.path.join(output_dir, TRAIN_SAMPLE_LIST)
+                list_path = _prefixed_path(output_dir, TRAIN_SAMPLE_LIST, _prefix)
                 purpose_list = [p.strip() for p in args.purpose_filter.split(",")] if args.purpose_filter else None
                 export_train_sample_list(semantic_data, list_path, purpose_filter=purpose_list)
 
-                stats_path = os.path.join(output_dir, DATASET_STATS)
+                stats_path = _prefixed_path(output_dir, DATASET_STATS, _prefix)
                 export_dataset_stats(semantic_data, stats_path)
 
             # v2.2 语义聚类导出
@@ -3082,18 +4275,18 @@ def main():
                         embeddings.append(emb)
                 if len(embeddings) >= 2:
                     clusters = cluster_videos_by_semantic(np.array(embeddings))
-                    cluster_html = os.path.join(output_dir, SCENE_CLUSTER_HTML)
+                    cluster_html = _prefixed_path(output_dir, SCENE_CLUSTER_HTML, _prefix)
                     export_scene_cluster_html(clusters, semantic_data, cluster_html)
 
             # v2.2 语义元数据导出
             if semantic_data:
-                meta_path = os.path.join(output_dir, SEMANTIC_META)
+                meta_path = _prefixed_path(output_dir, SEMANTIC_META, _prefix)
                 try:
-                    with open(meta_path, "w", encoding="utf-8") as f:
-                        json.dump(semantic_data, f, ensure_ascii=False, indent=2, default=str)
+                    json_data = json.dumps(semantic_data, ensure_ascii=False, indent=2, default=str)
+                    _atomic_write_text(meta_path, json_data)
                     log(f"[导出] 语义元数据 → {meta_path}", force=True)
-                except (IOError, OSError):
-                    pass
+                except (IOError, OSError) as e:
+                    log(f"[错误] 语义元数据导出失败: {e}")
         else:
             log("  [试运行] 跳过文件写入", force=True)
 
@@ -3124,3 +4317,65 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# ============================================================
+# find_mp4.py v2.4 底部使用示例（全套命令样例）
+# ============================================================
+# 以下为常见使用场景命令，可直接复制修改后运行。
+# 详细参数说明见文件头部"参数说明"章节，配置项参见 config.ini。
+#
+# === 0. 基础查重（默认输出 txt 报告） ===
+# python find_mp4.py --dir D:\\Videos
+# python find_mp4.py --dir D:\\Videos --threshold 0.75 --frames 12 --workers 8
+#
+# === 1. 纯时长统计（不查重，快速计数） ===
+# python find_mp4.py duration-stat --dir D:\\Videos --duration-filter ">=60"
+# python find_mp4.py duration-stat --dir D:\\Videos --duration-filter ">120&<=360" --duration-export
+#
+# === 2. 带时长筛选的查重 ===
+# python find_mp4.py --dir D:\\Videos --duration-filter ">=60" --threshold 0.7
+# python find_mp4.py --dir D:\\Videos --duration-filter "<30" --format html --gen-cleanup
+#
+# === 3. 导出时长清单 ===
+# python find_mp4.py --dir D:\\Videos --duration-filter ">=60" --duration-export
+#
+# === 4. 分辨率过滤查重 ===
+# python find_mp4.py --dir D:\\Videos --min-res 1920 --max-res 3840
+#
+# === 5. AI 语义聚类 ===
+# python find_mp4.py scan --dir D:\\Videos --semantic --cluster-semantic --cluster-thresh 0.4
+# python find_mp4.py cluster-scene --dir D:\\Videos
+#
+# === 6. 数据集筛选与拆分（支持硬链接节省磁盘） ===
+# python find_mp4.py dataset-filter --purpose 监控 --dir D:\\car_data
+# python find_mp4.py dataset-split --dir D:\\Videos --link-mode
+#
+# === 7. 缓存管理（合并/压缩/迁移） ===
+# python find_mp4.py merge-cache cache1.json cache2.json
+# python find_mp4.py --dir D:\\Videos --compress-cache
+#
+# === 8. 清理与恢复 ===
+# python find_mp4.py --dir D:\\Videos --gen-cleanup                  # 默认移至回收站
+# python find_mp4.py --dir D:\\Videos --gen-cleanup --hard-delete    # 永久删除（需输入 YES 确认）
+# python find_mp4.py --dir D:\\Videos --gen-cleanup --backup-path D:\\backup
+# python find_mp4.py --gen-restore                                   # 从审计日志生成恢复脚本
+# python find_mp4.py --dir D:\\Videos --export-clean-list --path-mask
+#
+# === 9. Excel 导出（需 openpyxl） ===
+# python find_mp4.py --dir D:\\Videos --format xlsx --output-prefix batch1_
+#
+# === 10. 安全特性组合 ===
+# python find_mp4.py --dir D:\\Videos --path-mask --protect-folder D:\\keep,D:\\source
+# python find_mp4.py --dir D:\\Videos --gen-cleanup --protect-file protect_list.txt
+#
+# === 11. 使用 config.ini 配置文件 ===
+# python find_mp4.py --config config.ini
+# python find_mp4.py --dir D:\\Videos --config config.ini --threshold 0.8
+#
+# === 12. 内置测试与标签热加载 ===
+# python find_mp4.py test
+# python find_mp4.py reload-labels
+#
+# === 13. AI 低质量过滤 + 帧不持久化（节省内存） ===
+# python find_mp4.py --dir D:\\Videos --semantic --skip-low-quality --no-store-frames
+# ============================================================
