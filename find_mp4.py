@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MP4 视频相似度查重工具 v2.5
+MP4 视频相似度查重工具 v2.6
 ==============================
 功能：扫描指定目录下的视频文件，基于多哈希融合（pHash+dHash）检测内容相似/重复的视频。
 支持 LSH 加速、增量扫描、缓存管理、多格式导出、安全清理、子命令架构。
@@ -10,6 +10,9 @@ v2.4 新增：时长筛选统计、分辨率过滤、Excel导出、HTML缩略图
           路径脱敏、缓存版本迁移、自定义权重配置、全局过滤规则、恢复脚本等。
 v2.5 新增：AI 自动分类（auto-classify 子命令）、AppContext 全局状态管理、
           分类与时长/分辨率/低质筛选联动、dry-run 安全预览模式。
+v2.6 新增：可视化看板（dashboard.py）、增强报告系统（report_generator.py）、
+          批量处理工具（batch_tools.py）、媒体分析工具（media_analyze.py）、
+          子命令委托架构、多目录批量扫描、素材标签系统、语义检索、PDF导出等。
 
 模块结构：
     0. 全局配置常量 + 退出码 + AI依赖检测 + AppContext 上下文类
@@ -26,6 +29,62 @@ v2.5 新增：AI 自动分类（auto-classify 子命令）、AppContext 全局�
     11. 语义聚类与数据集导出
     12. v2.4 时长筛选统计模块
     13. v2.5 AI 自动分类模块（K-Means 聚类 + 自动命名 + 文件组织）
+    14. v2.6 子命令委托架构（dashboard/batch_tools/media_analyze/report_generator）
+
+================ v2.5 参数说明 ================
+
+【v2.6 新增拓展工具子命令】（委托到独立模块执行，与主程序解耦）
+  dashboard                  启动 Streamlit 可视化看板（需 streamlit/plotly/pandas）
+  batch-scan                 多目录批量扫描（委托 batch_tools.py）
+  export-thumbnails          批量导出分组缩略图集（委托 batch_tools.py）
+  backup-duplicates          批量备份重复素材（委托 batch_tools.py）
+  replace-hardlinks          批量替换重复视频为硬链接（委托 batch_tools.py）
+  organize                   素材移动整理（按AI分类/时长/分辨率，委托 batch_tools.py）
+  extract-segments           重复画面片段提取（委托 batch_tools.py）
+  media-info                 批量导出视频元数据到 Excel（委托 media_analyze.py）
+  space-analyze              磁盘占用分析报告（委托 media_analyze.py）
+  tag-manage                 素材标签管理（增删查导出，委托 media_analyze.py）
+  similar-search             语义相似度检索（输入文字找视频，委托 media_analyze.py）
+  export-snapshot            导出缓存+报告快照 zip（委托 media_analyze.py）
+  diff-scan                  两次扫描对比报告（委托 media_analyze.py）
+  full-report                生成综合汇总 HTML 报告（委托 report_generator.py）
+  export-pdf                 HTML 报告转 PDF（委托 report_generator.py）
+  diff-report                数据对比报告（委托 report_generator.py）
+  quality-report             AI 数据集质检报告（委托 report_generator.py）
+  archive                    批量打包所有报告为 zip（委托 report_generator.py）
+
+【v2.6 新增命令行参数】
+  --report-name <名称>       自定义所有报告前缀名称
+  --export-pdf               扫描完成自动生成 PDF 完整报告（需 reportlab）
+  --batch-dir-list <txt>     批量扫描文件夹 txt 路径文件（一行一个目录）
+  --tag <标签>               扫描时过滤带指定标签素材
+  --similar-search "文本"    语义检索指定画面视频
+
+【v2.6 新增子命令使用示例】
+# 启动可视化看板
+streamlit run dashboard.py
+python find_mp4.py dashboard
+
+# 批量扫描多目录
+python find_mp4.py batch-scan --batch-dir-list dirs.txt --dir D:\\fallback
+
+# 语义检索视频
+python find_mp4.py similar-search "城市街道夜景" --dir D:\\Videos
+
+# 生成综合报告 + PDF
+python find_mp4.py full-report --dir D:\\Videos --project-name "项目A"
+python find_mp4.py export-pdf --input full_report.html
+
+# 磁盘空间分析
+python find_mp4.py space-analyze --dir D:\\Videos
+
+# 素材标签管理
+python find_mp4.py tag-manage add --video D:\\v.mp4 --tag 精品素材
+python find_mp4.py tag-manage list
+python find_mp4.py tag-manage export --output tags.txt
+
+# 导出快照存档
+python find_mp4.py export-snapshot --output snapshot.zip
 
 ================ v2.5 参数说明 ================
 
@@ -210,10 +269,10 @@ FFMPEG_AVAILABLE = bool(shutil.which("ffmpeg"))
 # ============================================================
 # 模块 0：全局配置常量 + 退出码
 # ============================================================
-__version__ = "2.5.0"
+__version__ = "2.6.0"
 
 # 缓存版本号（算法变更时自动作废旧缓存）
-CACHE_VERSION = "2.5"
+CACHE_VERSION = "2.6"
 
 # 基础参数
 HASH_SIZE = 8
@@ -508,6 +567,17 @@ def _build_shared_parser():
                         help="仅执行 AI 自动分类，不查重")
     parser.add_argument("--classify-method", type=str, default="kmeans",
                         help="分类算法 (kmeans)")
+    # 【v2.6 新增】拓展工具配套参数
+    parser.add_argument("--report-name", type=str, default="",
+                        help="自定义所有报告前缀名称（v2.6 新增）")
+    parser.add_argument("--export-pdf", action="store_true", default=False,
+                        help="扫描完成自动生成 PDF 完整报告（v2.6 新增，需 reportlab）")
+    parser.add_argument("--batch-dir-list", type=str, default="",
+                        help="批量扫描文件夹 txt 路径文件（v2.6 新增，一行一个目录）")
+    parser.add_argument("--tag", type=str, default="",
+                        help="扫描时过滤带指定标签素材（v2.6 新增）")
+    parser.add_argument("--similar-search", type=str, default="",
+                        help='语义检索指定画面视频，传入描述文本（v2.6 新增）')
     return parser
 
 
@@ -520,7 +590,13 @@ def parse_args():
                    "semantic-analyze", "dataset-filter", "cluster-scene",
                    "clear-semantic-cache", "dataset-split",
                    "duration-stat", "reload-labels", "test",
-                   "auto-classify"}  # 【v2.5 新增】AI 自动分类子命令
+                   "auto-classify",  # 【v2.5 新增】AI 自动分类子命令
+                   # 【v2.6 新增】可视化看板与拓展工具子命令（委托到独立模块）
+                   "dashboard", "batch-scan", "media-info", "space-analyze",
+                   "tag-manage", "similar-search", "export-snapshot", "diff-scan",
+                   "full-report", "export-pdf", "diff-report", "quality-report",
+                   "archive", "export-thumbnails", "backup-duplicates",
+                   "replace-hardlinks", "organize", "extract-segments"}
 
     # 提取第一个非flag参数来判断模式
     first_arg = None
@@ -611,6 +687,12 @@ def load_config_file(config_path: str, args):
         "classify_method": "classify-method",
         "n_clusters": "n-clusters",
         "execute": "execute",
+        # 【v2.6 新增】拓展工具参数映射
+        "report_name": "report-name",
+        "export_pdf": "export-pdf",
+        "batch_dir_list": "batch-dir-list",
+        "tag": "tag",
+        "similar_search": "similar-search",
     }
     for config_key, arg_key in mapping.items():
         if config_key in sec:
@@ -3970,6 +4052,89 @@ def _run_gen_restore(args):
         log(f"错误: 生成恢复脚本失败: {e}")
 
 
+# 【v2.6 新增】子命令委托函数：将新增子命令转发到独立模块执行
+def _delegate_to_module(module_name: str, sub_cmd: Optional[str], args) -> None:
+    """
+    将子命令委托到独立模块执行（v2.6 新增）。
+    保持主程序与拓展模块解耦，缺失模块时给出安装提示。
+
+    Args:
+        module_name: 目标模块名（不带 .py）
+        sub_cmd: 子命令名（None 表示直接运行模块）
+        args: 原始命令行参数
+    """
+    import importlib
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # 特殊处理 dashboard：直接启动 Streamlit
+    if module_name == "dashboard":
+        dashboard_path = os.path.join(script_dir, "dashboard.py")
+        if not os.path.exists(dashboard_path):
+            log("[错误] 未找到 dashboard.py", force=True)
+            log(f"  请确认文件位于: {dashboard_path}", force=True)
+            log("  或重新创建该文件，参考 README 中看板模块说明", force=True)
+            sys.exit(EXIT_BAD_ARGS)
+        try:
+            import streamlit  # noqa: F401
+        except ImportError:
+            log("[错误] 可视化看板需要 streamlit 库", force=True)
+            log("  安装: pip install streamlit plotly pandas", force=True)
+            log("  国内镜像: pip install streamlit plotly pandas -i https://pypi.tuna.tsinghua.edu.cn/simple", force=True)
+            sys.exit(EXIT_BAD_ARGS)
+        log("[启动] 正在启动可视化看板...", force=True)
+        log("  浏览器访问: http://localhost:8501", force=True)
+        log("  按 Ctrl+C 停止", force=True)
+        os.system(f"streamlit run \"{dashboard_path}\"")
+        return
+
+    # 通用模块委托
+    module_path = os.path.join(script_dir, f"{module_name}.py")
+    if not os.path.exists(module_path):
+        log(f"[错误] 未找到模块文件: {module_name}.py", force=True)
+        log(f"  请确认文件位于: {module_path}", force=True)
+        sys.exit(EXIT_BAD_ARGS)
+
+    try:
+        mod = importlib.import_module(module_name)
+    except ImportError as e:
+        log(f"[错误] 加载模块 {module_name} 失败: {e}", force=True)
+        missing = str(e)
+        if "streamlit" in missing:
+            log("  安装: pip install streamlit", force=True)
+        elif "plotly" in missing:
+            log("  安装: pip install plotly", force=True)
+        elif "openpyxl" in missing:
+            log("  安装: pip install openpyxl", force=True)
+        elif "reportlab" in missing:
+            log("  安装: pip install reportlab", force=True)
+        else:
+            log(f"  请检查依赖安装: {e}", force=True)
+        sys.exit(EXIT_BAD_ARGS)
+
+    # 调用模块的 main 函数
+    if hasattr(mod, "main"):
+        # 重写 sys.argv 让子模块的 argparse 正确解析
+        new_argv = [sys.argv[0]]
+        if sub_cmd:
+            new_argv.append(sub_cmd)
+        # 附加剩余参数（跳过原始子命令）
+        skip_first_sub = False
+        for arg in sys.argv[1:]:
+            if not skip_first_sub and not arg.startswith("-"):
+                skip_first_sub = True
+                continue
+            new_argv.append(arg)
+        old_argv = sys.argv
+        sys.argv = new_argv
+        try:
+            mod.main()
+        finally:
+            sys.argv = old_argv
+    else:
+        log(f"[错误] 模块 {module_name} 缺少 main() 入口函数", force=True)
+        sys.exit(EXIT_BAD_ARGS)
+
+
 # 【v2.5 新增】AI 自动分类子命令
 def _run_auto_classify(args):
     """执行 AI 自动分类"""
@@ -4182,6 +4347,37 @@ def main():
     # 【v2.5 新增】--auto-classify AI 自动分类
     if cmd == "auto-classify" or getattr(args, "classify_only", False):
         _run_auto_classify(args)
+        return
+
+    # ============ 【v2.6 新增】可视化看板与拓展工具子命令委托 ============
+    # 所有 v2.6 新增子命令委托到独立模块执行，保持主程序解耦
+    _V26_DELEGATE = {
+        # dashboard.py - Streamlit 可视化看板
+        "dashboard": ("dashboard", None),
+        # batch_tools.py - 批量处理工具
+        "batch-scan": ("batch_tools", "batch-scan"),
+        "export-thumbnails": ("batch_tools", "export-thumbnails"),
+        "backup-duplicates": ("batch_tools", "backup-duplicates"),
+        "replace-hardlinks": ("batch_tools", "replace-hardlinks"),
+        "organize": ("batch_tools", "organize"),
+        "extract-segments": ("batch_tools", "extract-segments"),
+        # media_analyze.py - 媒体分析工具
+        "media-info": ("media_analyze", "media-info"),
+        "space-analyze": ("media_analyze", "space-analyze"),
+        "tag-manage": ("media_analyze", "tag-manage"),
+        "similar-search": ("media_analyze", "similar-search"),
+        "export-snapshot": ("media_analyze", "export-snapshot"),
+        "diff-scan": ("media_analyze", "diff-scan"),
+        # report_generator.py - 增强报告系统
+        "full-report": ("report_generator", "full-report"),
+        "export-pdf": ("report_generator", "export-pdf"),
+        "diff-report": ("report_generator", "diff-report"),
+        "quality-report": ("report_generator", "quality-report"),
+        "archive": ("report_generator", "archive"),
+    }
+    if cmd in _V26_DELEGATE:
+        module_name, sub_cmd = _V26_DELEGATE[cmd]
+        _delegate_to_module(module_name, sub_cmd, args)
         return
 
     # --gen-restore
