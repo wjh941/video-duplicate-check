@@ -2,7 +2,7 @@
 """
 dashboard.py - MP4 视频查重工具可视化看板 (基于 Streamlit)
 ============================================================
-对应 find_mp4.py v2.5，复用 find_mp4 / report_generator / media_analyze / ai_semantic 模块。
+对应 find_mp4.py v2.6，复用 find_mp4 / report_generator / media_analyze / ai_semantic 模块。
 
 一键启动：
     streamlit run dashboard.py
@@ -443,6 +443,70 @@ def render_overview(cache: dict, cache_path: str, global_query: str) -> None:
             st.plotly_chart(fig3, use_container_width=True)
     except Exception as e:
         st.warning(f"磁盘占用图表渲染失败：{e}")
+
+    # ---------- v2.6 新增：文件大小分布 + 帧率分布 + 缓存健康度 ----------
+    st.divider()
+    col_size, col_fps, col_health = st.columns(3)
+
+    with col_size:
+        st.subheader("文件大小分布")
+        try:
+            sizes = [v.get("size", 0) for v in entries.values()]
+            size_buckets = {"<10MB": 0, "10-100MB": 0, "100MB-1GB": 0, ">1GB": 0}
+            for s in sizes:
+                s = float(s or 0)
+                if s < 10 * 1024**2:
+                    size_buckets["<10MB"] += 1
+                elif s < 100 * 1024**2:
+                    size_buckets["10-100MB"] += 1
+                elif s < 1024**3:
+                    size_buckets["100MB-1GB"] += 1
+                else:
+                    size_buckets[">1GB"] += 1
+            df_size = pd.DataFrame([{"大小区间": k, "数量": v} for k, v in size_buckets.items()])
+            fig_size = px.bar(df_size, x="大小区间", y="数量",
+                              color="数量", color_continuous_scale="Viridis")
+            st.plotly_chart(fig_size, use_container_width=True)
+        except Exception as e:
+            st.warning(f"文件大小图表渲染失败：{e}")
+
+    with col_fps:
+        st.subheader("帧率分布")
+        try:
+            fps_list = [v.get("fps", 0) for v in entries.values()]
+            fps_valid = [f for f in fps_list if f and f > 0]
+            if fps_valid:
+                df_fps = pd.DataFrame({"帧率": fps_valid})
+                fig_fps = px.histogram(df_fps, x="帧率", nbins=20,
+                                       color_discrete_sequence=["#636EFA"])
+                fig_fps.update_layout(bargap=0.1)
+                st.plotly_chart(fig_fps, use_container_width=True)
+            else:
+                st.caption("暂无帧率数据")
+        except Exception as e:
+            st.warning(f"帧率图表渲染失败：{e}")
+
+    with col_health:
+        st.subheader("缓存健康度")
+        try:
+            total = len(entries)
+            has_hash = sum(1 for v in entries.values() if v.get("phash"))
+            has_audio = sum(1 for v in entries.values() if v.get("audio"))
+            has_duration = sum(1 for v in entries.values() if v.get("duration", 0) > 0)
+            has_md5 = sum(1 for v in entries.values() if v.get("md5"))
+            health_data = [
+                {"指标": "有哈希", "覆盖率": has_hash / total * 100 if total else 0},
+                {"指标": "有时长", "覆盖率": has_duration / total * 100 if total else 0},
+                {"指标": "有音频", "覆盖率": has_audio / total * 100 if total else 0},
+                {"指标": "有MD5", "覆盖率": has_md5 / total * 100 if total else 0},
+            ]
+            df_health = pd.DataFrame(health_data)
+            fig_health = px.bar(df_health, x="指标", y="覆盖率",
+                                range_y=[0, 100], color="覆盖率",
+                                color_continuous_scale="RdYlGn")
+            st.plotly_chart(fig_health, use_container_width=True)
+        except Exception as e:
+            st.warning(f"缓存健康度图表渲染失败：{e}")
 
     # ---------- 全局搜索结果 ----------
     if global_query:
@@ -1161,7 +1225,7 @@ def main() -> None:
     # ---------- 侧边栏 ----------
     with st.sidebar:
         st.title("🎬 MP4 视频查重看板")
-        st.caption("find_mp4.py v2.5 配套可视化")
+        st.caption("find_mp4.py v2.6 配套可视化")
 
         # 主题切换
         theme = st.selectbox("主题", ["明色", "暗色"], key="theme_select")

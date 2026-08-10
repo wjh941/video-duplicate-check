@@ -464,6 +464,9 @@ def _build_shared_parser():
                         help="内存限制MB，0为不限制")
     parser.add_argument("--incremental", action="store_true", default=False,
                         help="增量模式，仅处理新增/修改视频")
+    # 【v2.6 新增】MD5 校验
+    parser.add_argument("--use-md5", action="store_true", default=False,
+                        help="启用文件 MD5 校验，检测内容真实变更（v2.6 新增，更精确但更慢）")
     parser.add_argument("--keep-max-size", action="store_true", default=False)
     parser.add_argument("--keep-latest", action="store_true", default=False)
     parser.add_argument("--keep-max-res", action="store_true", default=False)
@@ -552,6 +555,9 @@ def _build_shared_parser():
                         help="自定义输出文件前缀，多批次扫描不覆盖报告")
     parser.add_argument("--path-mask", action="store_true", default=False,
                         help="审计日志隐藏路径中间层级，保护素材隐私")
+    # 【v2.6 新增】交互式配置向导
+    parser.add_argument("--interactive", action="store_true", default=False,
+                        help="交互式配置向导，分步问答输入参数，降低新手使用门槛")
     parser.add_argument("--cluster-thresh", type=float, default=0.5,
                         help="语义聚类松紧阈值，默认 0.5")
     parser.add_argument("--skip-low-quality", action="store_true", default=False,
@@ -1028,7 +1034,7 @@ def _run_duration_stat(args):
         output_dir = os.path.dirname(os.path.abspath(__file__))
     os.makedirs(output_dir, exist_ok=True)
     log_init(output_dir)
-    signal.signal(signal.SIGINT, _signal_handler)
+    _register_signal_handler()  # 【v2.6 修复】统一信号注册，避免重复
 
     log("=" * 60, force=True)
     log("  视频时长统计", force=True)
@@ -1336,9 +1342,15 @@ def _normalize_path(path_str: str) -> str:
     except Exception:
         resolved = os.path.abspath(path_str)
     # Windows 长路径兼容（>248 字符时添加 \\?\ 前缀）
-    if (sys.platform == "win32" and len(resolved) > 248
-            and not resolved.startswith("\\\\?\\") and not resolved.startswith("\\\\")):
-        resolved = "\\\\?\\" + resolved
+    # 【v2.6 修复】支持 UNC 网络路径（\\server\share → \\?\UNC\server\share）
+    if sys.platform == "win32" and len(resolved) > 248:
+        if resolved.startswith("\\\\?\\") or resolved.startswith("\\\\?\\UNC\\"):
+            pass  # 已有前缀，不重复添加
+        elif resolved.startswith("\\\\"):
+            # UNC 网络路径：\\server\share → \\?\UNC\server\share
+            resolved = "\\\\?\\UNC\\" + resolved[2:]
+        else:
+            resolved = "\\\\?\\" + resolved
     return resolved
 
 
@@ -1538,12 +1550,31 @@ def save_cache(cache_path: str, cache: dict, chunk_size: int = 500,
         log(f"  [警告] 缓存保存失败: {e}")
 
 
-def is_cache_valid(cache_entry: dict, file_info: dict) -> bool:
-    """检查缓存条目有效性"""
-    return (
+def is_cache_valid(cache_entry: dict, file_info: dict, use_md5: bool = False) -> bool:
+    """
+    检查缓存条目有效性（v2.6 增强：可选 MD5 校验）。
+    v2.6 新增：当 use_md5=True 且缓存中有 md5 字段时，执行 MD5 校验，
+    避免"相同大小+相同时间戳但内容已修改"的漏检。
+
+    Args:
+        cache_entry: 缓存条目
+        file_info: 文件信息
+        use_md5: 是否启用 MD5 校验（默认 False，保持向后兼容）
+    """
+    # 基础校验：大小和时间戳
+    basic_ok = (
         cache_entry.get("size") == file_info["size"]
         and abs(cache_entry.get("mtime", 0) - file_info["mtime"]) < 1.0
     )
+    if not basic_ok:
+        return False
+    # v2.6 增强：MD5 校验（仅在缓存已有 md5 字段且启用时）
+    if use_md5 and cache_entry.get("md5"):
+        cached_md5 = cache_entry.get("md5")
+        current_md5 = _compute_file_md5(file_info["path"])
+        if current_md5 and cached_md5 != current_md5:
+            return False
+    return True
 
 
 # v2.3 新增：断点续扫进度缓存
@@ -1699,6 +1730,75 @@ def _compute_frame_hashes(gray_frame: np.ndarray) -> tuple:
     phash = imagehash.phash(pil_img, hash_size=HASH_SIZE)
     dhash = imagehash.dhash(pil_img, hash_size=HASH_SIZE)
     return phash, dhash
+
+
+def _compute_file_md5(file_path: str, chunk_size: int = 8192) -> str:
+    """
+    计算文件 MD5 指纹（v2.6 新增）。
+    用于增量扫描时判断文件内容是否真正变更，避免仅靠 mtime 漏检。
+
+    Args:
+        file_path: 文件路径
+        chunk_size: 分块读取大小（默认 8KB）
+
+    Returns:
+        MD5 十六进制字符串，失败返回空字符串
+    """
+    import hashlib
+    try:
+        md5 = hashlib.md5()
+        with open(file_path, "rb") as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                md5.update(chunk)
+        return md5.hexdigest()
+    except (IOError, OSError, PermissionError):
+        return ""
+
+
+def _detect_keyframes(cap, total_frames: int, threshold: float = 30.0,
+                      max_keys: int = 5) -> list:
+    """
+    检测视频关键帧（场景切换点）（v2.6 新增）。
+    基于帧间直方图差异检测场景切换，优先抽取关键帧进行哈希比对。
+
+    Args:
+        cap: cv2.VideoCapture 对象
+        total_frames: 总帧数
+        threshold: 直方图差异阈值（默认30.0）
+        max_keys: 最大关键帧数量（默认5）
+
+    Returns:
+        关键帧索引列表（含首帧），检测失败返回空列表
+    """
+    try:
+        keyframes = [0]  # 首帧总是关键帧
+        prev_hist = None
+        sample_step = max(1, total_frames // 100)  # 最多采样100帧
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        for idx in range(0, min(total_frames, 100 * sample_step), sample_step):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                continue
+
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
+            hist = cv2.normalize(hist, hist).flatten()
+
+            if prev_hist is not None:
+                diff = cv2.compareHist(prev_hist, hist, cv2.HISTCMP_BHATTACHARYYA) * 100
+                if diff > threshold and len(keyframes) < max_keys:
+                    keyframes.append(idx)
+
+            prev_hist = hist
+
+        return keyframes if len(keyframes) > 1 else []
+    except Exception:
+        return []
 
 
 def _extract_audio_hash(video_path: str, num_samples: int = 5) -> Optional[list]:
@@ -3329,10 +3429,26 @@ def _signal_handler(signum, frame):
         if _global_cache:
             save_cache(cache_path, _global_cache)
             log("[中断] 哈希缓存已保存", force=True)
-    except Exception:
-        pass
+    except Exception as e:
+        log(f"[中断] 缓存保存失败: {e}", force=True)
     log("[中断] 数据已保存，可安全退出", force=True)
     sys.exit(130)
+
+
+def _register_signal_handler():
+    """
+    统一注册信号处理器（v2.6 修复：避免重复注册覆盖）。
+    全局只注册一次，使用模块级标志位防止重复。
+    """
+    if getattr(_register_signal_handler, '_registered', False):
+        return  # 已注册，跳过
+    try:
+        signal.signal(signal.SIGINT, _signal_handler)
+        if hasattr(signal, 'SIGTERM'):
+            signal.signal(signal.SIGTERM, _signal_handler)
+    except (ValueError, OSError):
+        pass  # 非主线程无法注册信号，忽略
+    _register_signal_handler._registered = True
 
 
 def _print_version():
@@ -3540,7 +3656,7 @@ def _run_semantic_analyze(args):
     os.makedirs(output_dir, exist_ok=True)
 
     log_init(output_dir)
-    signal.signal(signal.SIGINT, _signal_handler)
+    _register_signal_handler()  # 【v2.6 修复】统一信号注册，避免重复
 
     if not AI_MODULE_AVAILABLE:
         log("错误: ai_semantic 模块未加载，请先安装依赖", force=True)
@@ -3588,7 +3704,7 @@ def _run_dataset_filter(args):
     os.makedirs(output_dir, exist_ok=True)
 
     log_init(output_dir)
-    signal.signal(signal.SIGINT, _signal_handler)
+    _register_signal_handler()  # 【v2.6 修复】统一信号注册，避免重复
 
     if not AI_MODULE_AVAILABLE:
         log("错误: ai_semantic 模块未加载", force=True)
@@ -3643,7 +3759,7 @@ def _run_cluster_scene(args):
     os.makedirs(output_dir, exist_ok=True)
 
     log_init(output_dir)
-    signal.signal(signal.SIGINT, _signal_handler)
+    _register_signal_handler()  # 【v2.6 修复】统一信号注册，避免重复
 
     if not AI_MODULE_AVAILABLE:
         log("错误: ai_semantic 模块未加载", force=True)
@@ -3790,7 +3906,7 @@ def _run_dataset_split(args):
     os.makedirs(output_dir, exist_ok=True)
 
     log_init(output_dir)
-    signal.signal(signal.SIGINT, _signal_handler)
+    _register_signal_handler()  # 【v2.6 修复】统一信号注册，避免重复
 
     log("=" * 60, force=True)
     log("  数据集分类拆分", force=True)
@@ -4243,10 +4359,97 @@ def _run_auto_classify(args):
         log(f"  示例: python find_mp4.py auto-classify --dir {folder_path} --execute", force=True)
 
 
+def _run_interactive_wizard() -> list:
+    """
+    交互式配置向导（v2.6 新增）。
+    分步问答引导用户输入扫描目录、相似度阈值、时长筛选等参数。
+    返回构造的命令行参数列表（sys.argv 格式）。
+    """
+    print("=" * 60)
+    print("  find_mp4.py v2.6 交互式配置向导")
+    print("=" * 60)
+    print("  按 Ctrl+C 可随时退出，直接回车使用默认值")
+    print()
+
+    cmd_args = ["find_mp4.py"]
+
+    # 步骤 1：选择子命令
+    print("【步骤 1/5】选择操作模式")
+    print("  1. 视频查重扫描（默认）")
+    print("  2. 纯时长统计（不查重）")
+    print("  3. AI 自动分类")
+    print("  4. 生成综合报告")
+    choice = input("请选择 [1-4]（默认 1）: ").strip() or "1"
+
+    if choice == "2":
+        cmd_args.extend(["duration-stat"])
+    elif choice == "3":
+        cmd_args.extend(["auto-classify"])
+    elif choice == "4":
+        cmd_args.extend(["full-report"])
+    # choice == "1" 不需要子命令
+
+    # 步骤 2：扫描目录
+    print("\n【步骤 2/5】输入扫描目录")
+    default_dir = os.getcwd()
+    dir_input = input(f"请输入视频目录路径（默认当前目录 {default_dir}）: ").strip()
+    cmd_args.extend(["--dir", dir_input if dir_input else default_dir])
+
+    # 步骤 3：相似度阈值
+    if choice in ("1", "4"):
+        print("\n【步骤 3/5】相似度阈值")
+        print("  0.7 = 严格（推荐）  0.6 = 宽松  0.8 = 极严格")
+        thresh = input("请输入阈值 0.0-1.0（默认 0.7）: ").strip()
+        if thresh:
+            try:
+                val = float(thresh)
+                if 0.0 <= val <= 1.0:
+                    cmd_args.extend(["--threshold", str(val)])
+            except ValueError:
+                print("  [警告] 无效阈值，使用默认 0.7")
+
+    # 步骤 4：时长筛选
+    print("\n【步骤 4/5】时长筛选（可选）")
+    print("  示例：>=60（≥1分钟）  <30（<30秒）  >120&<=360（2-6分钟）")
+    dur = input("请输入时长条件（留空跳过）: ").strip()
+    if dur:
+        if choice == "2":
+            cmd_args.extend(["--duration-filter", dur])
+        else:
+            cmd_args.extend(["--duration-filter", dur])
+
+    # 步骤 5：输出格式
+    if choice in ("1", "4"):
+        print("\n【步骤 5/5】报告输出格式")
+        print("  1. HTML（默认）  2. Markdown  3. Excel  4. 全部")
+        fmt = input("请选择 [1-4]（默认 1）: ").strip() or "1"
+        fmt_map = {"1": "html", "2": "md", "3": "xlsx", "4": "all"}
+        if fmt in fmt_map:
+            cmd_args.extend(["--format", fmt_map[fmt]])
+
+    print("\n" + "=" * 60)
+    print("  配置完成！即将执行：")
+    print("  " + " ".join(f'"{a}"' if " " in a else a for a in cmd_args[1:]))
+    print("=" * 60)
+    confirm = input("\n确认执行？[Y/n]: ").strip().lower() or "y"
+    if confirm not in ("y", "yes", "是"):
+        print("已取消。")
+        sys.exit(0)
+
+    return cmd_args
+
+
 def main():
     global _global_cache, _global_exit_code, _quiet_mode
 
     args = parse_args()
+
+    # 【v2.6 新增】交互式配置向导
+    if getattr(args, "interactive", False):
+        import sys as _sys
+        _sys.argv = _run_interactive_wizard()
+        args = parse_args()
+
     validate_args(args)
 
     # 加载配置文件
@@ -4420,7 +4623,7 @@ def main():
 
     # 日志
     log_init(output_dir)
-    signal.signal(signal.SIGINT, _signal_handler)
+    _register_signal_handler()  # 【v2.6 修复】统一信号注册，避免重复
 
     cache_path = os.path.join(output_dir, CACHE_FILE)
     keep_strategy = _get_keep_strategy(args)

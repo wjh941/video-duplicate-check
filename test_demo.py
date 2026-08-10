@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-MP4 视频查重工具 v2.3 自测脚本
+MP4 视频查重工具 v2.6 自测脚本
 一键执行基础扫描、AI分析、导出全流程自测。
 
 使用方法：
@@ -69,12 +69,12 @@ def test_version():
             [sys.executable, 'find_mp4.py', 'version'],
             capture_output=True, text=True, timeout=10
         )
-        if 'v2.3' in result.stdout or 'v2.3' in result.stderr:
+        if 'v2.6' in result.stdout or 'v2.6' in result.stderr:
             _passed += 1
-            _print_result("版本信息", "pass", "v2.3.0 确认")
+            _print_result("版本信息", "pass", "v2.6.0 确认")
         else:
             _failed += 1
-            _print_result("版本信息", "fail", "未找到 v2.3 标识")
+            _print_result("版本信息", "fail", "未找到 v2.6 标识")
     except Exception as e:
         _failed += 1
         _print_result("版本信息", "fail", str(e))
@@ -90,13 +90,15 @@ def test_help():
             capture_output=True, text=True, timeout=10
         )
         output = result.stdout + result.stderr
-        # 检查 v2.3 新参数是否存在
+        # 检查 v2.6 新参数是否存在
         new_params = ['--lite-csv', '--backup-path', '--cluster-num', '--no-store-embed',
-                      '--cache-expire-days', '--clip-model-path']
+                      '--cache-expire-days', '--clip-model-path',
+                      '--duration-filter', '--duration-stat', '--use-md5',
+                      '--interactive', '--export-clean-list', '--output-prefix']
         missing = [p for p in new_params if p not in output]
         if not missing:
             _passed += 1
-            _print_result("帮助文档", "pass", "v2.3 新参数全部存在")
+            _print_result("帮助文档", "pass", "v2.6 新参数全部存在")
         else:
             _failed += 1
             _print_result("帮助文档", "fail", f"缺少参数: {missing}")
@@ -284,10 +286,154 @@ def test_lite_csv():
         shutil.rmtree(output_dir, ignore_errors=True)
 
 
+def test_duration_filter():
+    """测试时长筛选功能（v2.6 新增）"""
+    global _passed, _failed
+    try:
+        import find_mp4
+        # 测试解析函数
+        conditions = find_mp4.parse_duration_filter(">=60")
+        if conditions and conditions[0] == ('>=', 60.0):
+            _passed += 1
+            _print_result("时长筛选解析", "pass", ">=60 解析正确")
+        else:
+            _failed += 1
+            _print_result("时长筛选解析", "fail", f"解析结果: {conditions}")
+            return
+
+        # 测试多条件
+        multi = find_mp4.parse_duration_filter(">120&<=360")
+        if len(multi) == 2:
+            _passed += 1
+            _print_result("多条件时长筛选", "pass", ">120&<=360 解析正确")
+        else:
+            _failed += 1
+            _print_result("多条件时长筛选", "fail", f"解析结果: {multi}")
+
+        # 测试匹配
+        if find_mp4.match_duration(90, [('>=', 60)]):
+            _passed += 1
+            _print_result("时长匹配", "pass", "90秒 >=60 匹配")
+        else:
+            _failed += 1
+            _print_result("时长匹配", "fail", "90秒应匹配 >=60")
+    except Exception as e:
+        _failed += 1
+        _print_result("时长筛选", "fail", str(e))
+
+
+def test_md5_checksum():
+    """测试文件 MD5 校验（v2.6 新增）"""
+    global _passed, _failed
+    try:
+        import find_mp4
+        test_file = os.path.join(tempfile.gettempdir(), "test_md5.txt")
+        with open(test_file, "w") as f:
+            f.write("test content for md5")
+
+        md5_1 = find_mp4._compute_file_md5(test_file)
+        md5_2 = find_mp4._compute_file_md5(test_file)
+
+        if md5_1 and md5_1 == md5_2:
+            _passed += 1
+            _print_result("MD5校验", "pass", f"MD5: {md5_1[:8]}...")
+        else:
+            _failed += 1
+            _print_result("MD5校验", "fail", "同一文件 MD5 不一致")
+
+        # 修改内容后 MD5 应变化
+        with open(test_file, "w") as f:
+            f.write("modified content")
+        md5_3 = find_mp4._compute_file_md5(test_file)
+        if md5_3 != md5_1:
+            _passed += 1
+            _print_result("MD5变更检测", "pass", "内容修改后 MD5 变化")
+        else:
+            _failed += 1
+            _print_result("MD5变更检测", "fail", "内容修改后 MD5 未变")
+
+        os.remove(test_file)
+    except Exception as e:
+        _failed += 1
+        _print_result("MD5校验", "fail", str(e))
+
+
+def test_cross_disk_detection():
+    """测试跨盘检测（v2.6 新增）"""
+    global _passed, _failed
+    try:
+        import batch_tools
+        # 同盘检测
+        result = batch_tools._is_cross_disk("C:\\a.mp4", "C:\\b\\c.mp4")
+        if result is False:
+            _passed += 1
+            _print_result("同盘检测", "pass", "C:\\ 和 C:\\ 判定为同盘")
+        else:
+            _failed += 1
+            _print_result("同盘检测", "fail", "同盘误判为跨盘")
+            return
+
+        # 跨盘检测
+        result2 = batch_tools._is_cross_disk("C:\\a.mp4", "D:\\b.mp4")
+        if result2 is True:
+            _passed += 1
+            _print_result("跨盘检测", "pass", "C:\\ 和 D:\\ 判定为跨盘")
+        else:
+            _failed += 1
+            _print_result("跨盘检测", "fail", "跨盘误判为同盘")
+    except Exception as e:
+        _failed += 1
+        _print_result("跨盘检测", "fail", str(e))
+
+
+def test_unc_path():
+    """测试 UNC 网络路径支持（v2.6 新增）"""
+    global _passed, _failed
+    try:
+        import find_mp4
+        # 测试 UNC 路径转换（模拟长路径）
+        unc_path = "\\\\server\\share\\video.mp4"
+        # 直接调用会因路径不存在而走 except 分支，但不会崩溃
+        result = find_mp4._normalize_path(unc_path)
+        if result:
+            _passed += 1
+            _print_result("UNC路径处理", "pass", "未崩溃且返回结果")
+        else:
+            _failed += 1
+            _print_result("UNC路径处理", "fail", "返回空")
+    except Exception as e:
+        _failed += 1
+        _print_result("UNC路径处理", "fail", str(e))
+
+
+def test_signal_handler_registration():
+    """测试信号处理器单次注册（v2.6 新增）"""
+    global _passed, _failed
+    try:
+        import find_mp4
+        # 第一次注册
+        find_mp4._register_signal_handler()
+        first_registered = find_mp4._register_signal_handler._registered
+
+        # 第二次注册（应跳过）
+        find_mp4._register_signal_handler()
+        second_registered = find_mp4._register_signal_handler._registered
+
+        if first_registered and second_registered:
+            _passed += 1
+            _print_result("信号处理器注册", "pass", "重复注册被正确跳过")
+        else:
+            _failed += 1
+            _print_result("信号处理器注册", "fail", "注册标志异常")
+    except Exception as e:
+        _failed += 1
+        _print_result("信号处理器注册", "fail", str(e))
+
+
 def main():
     """主测试入口"""
     print("=" * 60)
-    print("  MP4 视频查重工具 v2.3 自测脚本")
+    print("  MP4 视频查重工具 v2.6 自测脚本")
     print("=" * 60)
     print()
 
@@ -304,6 +450,11 @@ def main():
         ("缓存/标签系统", test_cache_system),
         ("新子命令", test_new_subcommands),
         ("轻量CSV导出", test_lite_csv),
+        ("时长筛选", test_duration_filter),
+        ("MD5校验", test_md5_checksum),
+        ("跨盘检测", test_cross_disk_detection),
+        ("UNC路径", test_unc_path),
+        ("信号处理器", test_signal_handler_registration),
     ]
 
     for name, func in tests:

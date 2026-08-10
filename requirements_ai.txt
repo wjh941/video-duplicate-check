@@ -1,0 +1,15 @@
+# ========== AI 语义分析扩展依赖（可选） ==========
+# 安装方式: pip install -r requirements_ai.txt
+# 国内镜像: pip install -r requirements_ai.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+#
+# 说明：
+# - torch 包体积较大（CPU版约 200MB，GPU版约 2GB+）
+# - 如无 NVIDIA GPU，将安装 CPU 版本（速度较慢但功能完整）
+# - open-clip-torch 提供 CLIP 模型加载能力
+# - transformers 提供图像分类管道
+# - scikit-learn 提供 K-Means 聚类算法
+
+torch>=2.0.0
+open-clip-torch>=2.20.0
+transformers>=4.30.0
+scikit-learn>=1.3.0

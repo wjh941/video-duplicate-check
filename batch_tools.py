@@ -77,6 +77,52 @@ except ImportError as _e:
     print("[batch_tools] find_mp4.py 是 MP4 视频查重工具 v2.5 主程序，为本工具提供基础扫描/缓存能力。")
     sys.exit(3)
 
+
+def _is_cross_disk(path1: str, path2: str) -> bool:
+    """
+    检查两个路径是否位于不同的磁盘分区（v2.6 新增）。
+    硬链接不支持跨磁盘分区，需在执行前预检。
+
+    Args:
+        path1: 第一个路径
+        path2: 第二个路径
+
+    Returns:
+        True 表示跨盘，False 表示同盘
+    """
+    if os.name == 'nt':  # Windows
+        drive1 = os.path.splitdrive(os.path.abspath(path1))[0].lower()
+        drive2 = os.path.splitdrive(os.path.abspath(path2))[0].lower()
+        return drive1 != drive2
+    else:  # Unix/Linux：比较设备号
+        try:
+            st1 = os.stat(path1)
+            st2 = os.stat(path2)
+            return st1.st_dev != st2.st_dev
+        except OSError:
+            return True  # 无法确定时保守处理
+
+
+def _cleanup_tmp_files(directory: str, pattern: str = ".__hlink_tmp_*"):
+    """
+    清理残留的临时文件（v2.6 新增）。
+    在程序启动时调用，清理上次崩溃残留的临时硬链接文件。
+
+    Args:
+        directory: 要清理的目录
+        pattern: 文件名匹配模式
+    """
+    import glob
+    try:
+        tmp_files = glob.glob(os.path.join(directory, pattern))
+        for tmp in tmp_files:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    except Exception:
+        pass
+
 # 缩略图提取函数（若 find_mp4 提供则复用，否则自行实现）
 _extract_thumbnail_b64 = getattr(find_mp4, "_extract_video_thumbnail_base64", None)
 
@@ -394,14 +440,34 @@ def replace_with_hardlinks(groups: list[dict], mp4_files: list[dict],
             plan.append((retained_path, info["path"]))
 
     log(f"[replace-hardlinks] 待替换为硬链接的文件数: {len(plan)}", force=True)
+    # 【v2.6 新增】启动时清理上次崩溃残留的临时文件
+    if plan:
+        first_dir = os.path.dirname(plan[0][1])
+        _cleanup_tmp_files(first_dir)
     if dry_run:
         log("[replace-hardlinks] dry-run 模式：仅打印将要替换的文件清单", force=True)
+        # 【v2.6 新增】跨盘预检
+        cross_disk = []
+        for retained, target in plan:
+            if _is_cross_disk(retained, target):
+                cross_disk.append((retained, target))
+        if cross_disk:
+            log(f"  [警告] 检测到 {len(cross_disk)} 个跨磁盘分区文件，硬链接不支持跨盘：", force=True)
+            for r, t in cross_disk[:5]:
+                log(f"    {t} (盘 {os.path.splitdrive(t)[0]}) ← {r} (盘 {os.path.splitdrive(r)[0]})", force=True)
         for i, (retained, target) in enumerate(plan, 1):
-            log(f"  {i}. {target}  ->  硬链接 -> {retained}", force=True)
+            cross_mark = " [跨盘-跳过]" if _is_cross_disk(retained, target) else ""
+            log(f"  {i}. {target}  ->  硬链接 -> {retained}{cross_mark}", force=True)
         return len(plan)
 
     replaced = 0
+    skipped_cross_disk = 0
     for retained_path, target_path in plan:
+        # 【v2.6 新增】跨盘预检：硬链接不支持跨磁盘分区
+        if _is_cross_disk(retained_path, target_path):
+            log(f"  [跳过-跨盘] {target_path} 与 {retained_path} 不在同一磁盘分区", force=True)
+            skipped_cross_disk += 1
+            continue
         # 安全策略：先在同目录创建临时硬链接，成功后删除原文件并重命名
         # 这样硬链接创建失败时原文件完全不受影响
         target_dir = os.path.dirname(target_path)
