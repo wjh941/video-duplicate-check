@@ -3506,6 +3506,14 @@ def _summary_quality_buckets(group_rows: list[dict]) -> dict:
     return counts
 
 
+def _summary_exit_status(groups: list[dict], bad_videos: list[dict]) -> str:
+    if groups:
+        return "duplicates_found"
+    if bad_videos:
+        return "completed_with_errors"
+    return "clean"
+
+
 def export_summary_json(path: str, mp4_files: list[dict], video_hashes: dict,
                         bad_videos: list[dict], groups: list[dict],
                         semantic_results: dict = None):
@@ -3533,6 +3541,7 @@ def export_summary_json(path: str, mp4_files: list[dict], video_hashes: dict,
                            "similarities": similarities})
     summary = {
         "schema_version": 1,
+        "status": _summary_exit_status(groups, bad_videos),
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "total_videos": len(mp4_files),
         "hash_success": len(video_hashes),
