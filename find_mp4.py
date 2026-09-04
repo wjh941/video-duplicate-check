@@ -452,6 +452,8 @@ def _build_shared_parser():
     parser.add_argument("--version", action="store_true", default=False)
     parser.add_argument("--clean-cache", action="store_true", default=False)
     parser.add_argument("--export-hash", action="store_true", default=False)
+    parser.add_argument("--summary-json", action="store_true", default=False,
+                        help="导出机器可读的扫描摘要 JSON，便于脚本和看板集成")
     parser.add_argument("--gen-cleanup", action="store_true", default=False)
     # v2.1 新增参数
     parser.add_argument(
@@ -3384,6 +3386,43 @@ def export_audit_log(output_dir: str, groups: list[dict], mp4_files: list[dict],
         log(f"[错误] 审计日志导出失败: {e}")
 
 
+def export_summary_json(path: str, mp4_files: list[dict], video_hashes: dict,
+                        bad_videos: list[dict], groups: list[dict],
+                        semantic_results: dict = None):
+    """导出稳定的机器可读摘要，供 CI、看板和外部清理工具使用。"""
+    duplicate_bytes = 0
+    group_rows = []
+    for number, group in enumerate(groups, 1):
+        members = []
+        for idx, info in group.get("members", []):
+            retained = idx == group.get("retain_idx")
+            if not retained:
+                duplicate_bytes += int(info.get("size", 0) or 0)
+            members.append({
+                "index": idx, "name": info.get("name", ""),
+                "path": info.get("path", ""),
+                "size": int(info.get("size", 0) or 0),
+                "retained": retained,
+            })
+        group_rows.append({"group": number, "members": members,
+                           "similarities": group.get("similarities", {})})
+    summary = {
+        "schema_version": 1,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "total_videos": len(mp4_files),
+        "hash_success": len(video_hashes),
+        "parse_failures": len(bad_videos),
+        "duplicate_groups": len(groups),
+        "duplicate_videos": sum(len(g.get("members", [])) for g in groups),
+        "reclaimable_bytes": duplicate_bytes,
+        "bad_videos": bad_videos,
+        "groups": group_rows,
+        "semantic_analyzed": len(semantic_results or {}),
+    }
+    _atomic_write_text(path, json.dumps(summary, ensure_ascii=False, indent=2, default=str))
+    log(f"[导出] 扫描摘要 JSON → {path}")
+
+
 def print_summary(
     mp4_files: list[dict],
     video_hashes: dict,
@@ -4882,6 +4921,10 @@ def main():
 
             export_paths_list(groups, mp4_files, paths_path)
             export_bad_videos(bad_videos, bad_path)
+            if getattr(args, "summary_json", False):
+                summary_path = _prefixed_path(output_dir, "scan_summary.json", _prefix)
+                export_summary_json(summary_path, mp4_files, video_hashes,
+                                    bad_videos, groups, semantic_results)
 
             # v2.3 新增：损坏视频纯路径清单
             if getattr(args, "export_bad_paths", False):

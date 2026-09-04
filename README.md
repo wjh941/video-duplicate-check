@@ -77,6 +77,9 @@ pip install openpyxl
 # 最基础用法（默认扫描 MP4/MOV/MKV/AVI/WebM/M4V/FLV）
 python find_mp4.py --dir D:\Videos
 
+# 导出机器可读摘要，便于 CI/看板/自动化脚本读取
+python find_mp4.py --dir D:\Videos --summary-json
+
 # 只扫描指定格式
 python find_mp4.py --dir D:\Videos --ext mp4,mov,mkv
 
@@ -258,6 +261,7 @@ python find_mp4.py diff-scan --old-cache old.json --new-cache new.json
 | `--batch-dir-list` | str | "" | 批量扫描文件夹 txt 路径文件 |
 | `--tag` | str | "" | 扫描时过滤带指定标签素材 |
 | `--similar-search` | str | "" | 语义检索指定画面视频 |
+| `--summary-json` | flag | False | 导出机器可读扫描摘要 JSON |
 
 ## v2.6 新增输出文件
 
