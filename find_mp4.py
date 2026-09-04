@@ -3489,6 +3489,23 @@ def _similarity_level(similarity: float) -> str:
     return "weak_match"
 
 
+def _summary_extensions(mp4_files: list[dict]) -> dict:
+    counts = {}
+    for info in mp4_files:
+        suffix = os.path.splitext(info.get("name", ""))[1].lower() or "[unknown]"
+        counts[suffix] = counts.get(suffix, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _summary_quality_buckets(group_rows: list[dict]) -> dict:
+    counts = {"exact_or_reencoded": 0, "highly_similar": 0,
+              "possibly_similar": 0, "weak_match": 0}
+    for row in group_rows:
+        level = row.get("level", "weak_match")
+        counts[level] = counts.get(level, 0) + 1
+    return counts
+
+
 def export_summary_json(path: str, mp4_files: list[dict], video_hashes: dict,
                         bad_videos: list[dict], groups: list[dict],
                         semantic_results: dict = None):
@@ -3527,6 +3544,8 @@ def export_summary_json(path: str, mp4_files: list[dict], video_hashes: dict,
         "groups": group_rows,
         "semantic_analyzed": len(semantic_results or {}),
         "quality_scoring": "metadata_resolution_bitrate_v1",
+        "extensions": _summary_extensions(mp4_files),
+        "quality_buckets": _summary_quality_buckets(group_rows),
     }
     _atomic_write_text(path, json.dumps(summary, ensure_ascii=False, indent=2, default=str))
     log(f"[导出] 扫描摘要 JSON → {path}")

@@ -339,7 +339,7 @@ python find_mp4.py diff-scan --old-cache old.json --new-cache new.json
 python find_mp4.py --dir D:\Videos --summary-json --output-dir D:\Reports
 ```
 
-外部程序只需读取 `D:\Reports\scan_summary.json`，即可获得扫描数量、失败数量、重复等级、可释放空间和清理候选，不需要解析终端中文日志。`schema_version` 用于未来兼容升级；建议自动化程序先检查它再读取字段。
+外部程序只需读取 `D:\Reports\scan_summary.json`，即可获得扫描数量、失败数量、重复等级、可释放空间、文件格式分布和清理候选，不需要解析终端中文日志。`schema_version` 用于未来兼容升级；建议自动化程序先检查它再读取字段。摘要还包含 `extensions`（格式数量）和 `quality_buckets`（重复等级统计），方便 NAS 看板和定时任务直接展示。
 
 ## v2.6 新增输出文件
 
