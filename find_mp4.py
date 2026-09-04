@@ -1181,6 +1181,12 @@ def apply_duration_resolution_filter(
     for fi in mp4_files:
         path = fi["path"]
         keep = True
+        # 统一写回筛选阶段解析出的元数据，后续流程和摘要可直接复用。
+        cached_entry = cache.get(path) if isinstance(cache.get(path), dict) else None
+        if cached_entry:
+            for field in ("duration", "width", "height", "fps"):
+                if not fi.get(field) and cached_entry.get(field):
+                    fi[field] = cached_entry[field]
 
         # 时长筛选
         if conditions:
