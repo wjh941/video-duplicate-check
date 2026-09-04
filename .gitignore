@@ -11,6 +11,8 @@ video_hash_cache.json
 video_hash_cache.json.bak
 video_hash_cache_part*.json
 video_hash_cache.json.gz
+video_hash_cache.sqlite3
+*.sqlite3
 
 # 导出报表
 similar_result.csv
