@@ -55,6 +55,7 @@ thumbnails/
 # 清理脚本
 cleanup_duplicates.bat
 cleanup_duplicates.sh
+cleanup_plan.json
 
 # 日志
 run_log.txt

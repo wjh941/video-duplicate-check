@@ -309,6 +309,7 @@ SCENE_CLUSTER_HTML = "scene_cluster.html"
 # v2.4 新增输出文件
 CLEAN_LIST_FILE = "clean_list.txt"  # 仅待清理视频路径清单
 RESTORE_SCRIPT = "restore_duplicates.bat"  # 恢复脚本
+CLEANUP_PLAN_FILE = "cleanup_plan.json"  # 可审计清理计划
 DURATION_LIST_FILE = "duration_filter_list.txt"  # 时长筛选清单
 
 # 错误类型
@@ -3259,6 +3260,25 @@ def generate_cleanup_script(
             if purpose:
                 return f" [用途: {purpose}]"
         return ""
+
+    # 写出结构化清理计划：先审阅/备份，再执行脚本，便于恢复和自动化。
+    plan_path = os.path.join(output_dir, CLEANUP_PLAN_FILE)
+    plan_rows = []
+    for gi, group in enumerate(groups, 1):
+        for idx, info in group.get("members", []):
+            if idx == group.get("retain_idx") or is_protected(info["path"]):
+                continue
+            plan_rows.append({
+                "group": gi, "source": info["path"],
+                "size": int(info.get("size", 0) or 0),
+                "retained": mp4_files[group["retain_idx"]]["path"],
+                "action": "delete" if hard_delete else "move_to_trash",
+            })
+    plan = {"schema_version": 1, "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "items": plan_rows, "count": len(plan_rows),
+            "total_bytes": sum(row["size"] for row in plan_rows)}
+    _atomic_write_text(plan_path, json.dumps(plan, ensure_ascii=False, indent=2))
+    log(f"[导出] 清理计划 → {plan_path} ({len(plan_rows)} 个)")
 
     # Windows BAT
     bat_path = os.path.join(output_dir, CLEANUP_SCRIPT_WIN)
