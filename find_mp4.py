@@ -1169,10 +1169,8 @@ def apply_duration_resolution_filter(
     if not conditions and min_res <= 0 and max_res <= 0:
         return mp4_files, stats
 
-    # 加载缓存用于分辨率查询（避免重复打开视频）
-    cache = {}
-    if cache_path and (min_res > 0 or max_res > 0):
-        cache = load_cache(cache_path)
+    # 加载缓存用于时长/分辨率查询，避免筛选阶段重复打开视频。
+    cache = load_cache(cache_path) if cache_path else {}
 
     filtered = []
     for fi in mp4_files:
@@ -1182,15 +1180,19 @@ def apply_duration_resolution_filter(
         # 时长筛选
         if conditions:
             duration = 0.0
-            try:
-                cap = cv2.VideoCapture(path)
-                if cap.isOpened():
-                    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                    fps = cap.get(cv2.CAP_PROP_FPS)
-                    duration = total_frames / fps if fps > 0 else 0
+            cached_entry = cache.get(path) if isinstance(cache.get(path), dict) else None
+            if cached_entry:
+                duration = float(cached_entry.get("duration", 0) or 0)
+            if duration <= 0:
+                try:
+                    cap = cv2.VideoCapture(path)
+                    if cap.isOpened():
+                        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                        fps = cap.get(cv2.CAP_PROP_FPS)
+                        duration = total_frames / fps if fps > 0 else 0
                     cap.release()
-            except Exception:
-                duration = 0.0
+                except Exception:
+                    duration = 0.0
             if not match_duration(duration, conditions):
                 stats["duration_filtered"] += 1
                 keep = False
