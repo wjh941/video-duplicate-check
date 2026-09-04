@@ -261,7 +261,7 @@ python find_mp4.py diff-scan --old-cache old.json --new-cache new.json
 | `--batch-dir-list` | str | "" | 批量扫描文件夹 txt 路径文件 |
 | `--tag` | str | "" | 扫描时过滤带指定标签素材 |
 | `--similar-search` | str | "" | 语义检索指定画面视频 |
-| `--summary-json` | flag | False | 导出机器可读扫描摘要 JSON |
+| `--summary-json` | flag | False | 导出机器可读扫描摘要 JSON（含重复等级和可释放空间） |
 
 ## v2.6 新增输出文件
 

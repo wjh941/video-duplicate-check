@@ -3454,6 +3454,17 @@ def export_audit_log(output_dir: str, groups: list[dict], mp4_files: list[dict],
         log(f"[错误] 审计日志导出失败: {e}")
 
 
+def _similarity_level(similarity: float) -> str:
+    """将相似度转换为便于人工和自动化使用的等级。"""
+    if similarity >= 0.98:
+        return "exact_or_reencoded"
+    if similarity >= 0.85:
+        return "highly_similar"
+    if similarity >= 0.70:
+        return "possibly_similar"
+    return "weak_match"
+
+
 def export_summary_json(path: str, mp4_files: list[dict], video_hashes: dict,
                         bad_videos: list[dict], groups: list[dict],
                         semantic_results: dict = None):
@@ -3472,8 +3483,12 @@ def export_summary_json(path: str, mp4_files: list[dict], video_hashes: dict,
                 "size": int(info.get("size", 0) or 0),
                 "retained": retained,
             })
+        similarities = group.get("similarities", {})
+        max_similarity = max(similarities.values()) if similarities else 1.0
         group_rows.append({"group": number, "members": members,
-                           "similarities": group.get("similarities", {})})
+                           "max_similarity": max_similarity,
+                           "level": _similarity_level(max_similarity),
+                           "similarities": similarities})
     summary = {
         "schema_version": 1,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
