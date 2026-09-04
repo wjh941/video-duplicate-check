@@ -263,6 +263,16 @@ python find_mp4.py diff-scan --old-cache old.json --new-cache new.json
 | `--similar-search` | str | "" | 语义检索指定画面视频 |
 | `--summary-json` | flag | False | 导出机器可读扫描摘要 JSON（含重复等级、质量分和可释放空间） |
 
+## 自动化集成与任务结果
+
+使用 `--summary-json` 可将一次扫描结果作为稳定的任务结果文件导出：
+
+```bash
+python find_mp4.py --dir D:\Videos --summary-json --output-dir D:\Reports
+```
+
+外部程序只需读取 `D:\Reports\scan_summary.json`，即可获得扫描数量、失败数量、重复等级、可释放空间和清理候选，不需要解析终端中文日志。`schema_version` 用于未来兼容升级；建议自动化程序先检查它再读取字段。
+
 ## v2.6 新增输出文件
 
 | 文件 | 说明 |
