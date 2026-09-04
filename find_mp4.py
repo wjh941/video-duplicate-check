@@ -209,6 +209,7 @@ import json
 import os
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -283,6 +284,7 @@ FAST_THRESHOLD = 0.85
 
 # 输出文件名
 CACHE_FILE = "video_hash_cache.json"
+SQLITE_CACHE_FILE = "video_hash_cache.sqlite3"
 RESULT_CSV = "similar_result.csv"
 RESULT_GROUPS = "duplicate_groups.txt"
 RESULT_GROUPS_MD = "duplicate_groups.md"
@@ -1439,12 +1441,55 @@ def _migrate_cache_version(data: dict, old_version: str, new_version: str) -> Op
         return None
 
 
+def _sqlite_cache_path(cache_path: str) -> str:
+    """Return the sidecar SQLite cache path for a JSON cache path."""
+    return os.path.splitext(cache_path)[0] + ".sqlite3"
+
+
+def _load_sqlite_cache(cache_path: str) -> Optional[dict]:
+    """Load cache entries from SQLite when the sidecar exists."""
+    db_path = _sqlite_cache_path(cache_path)
+    if not os.path.exists(db_path):
+        return None
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS cache (path TEXT PRIMARY KEY, data TEXT NOT NULL)")
+            rows = conn.execute("SELECT path, data FROM cache").fetchall()
+        result = {"_version": CACHE_VERSION}
+        for path, data in rows:
+            result[path] = json.loads(data)
+        return result
+    except (sqlite3.Error, OSError, ValueError, TypeError):
+        return None
+
+
+def _save_sqlite_cache(cache_path: str, cache: dict) -> bool:
+    """Persist cache entries transactionally in a compact SQLite sidecar."""
+    db_path = _sqlite_cache_path(cache_path)
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("CREATE TABLE IF NOT EXISTS cache (path TEXT PRIMARY KEY, data TEXT NOT NULL)")
+            conn.execute("BEGIN")
+            conn.execute("DELETE FROM cache")
+            rows = [(k, json.dumps(v, ensure_ascii=False, separators=(",", ":"), default=str))
+                    for k, v in cache.items() if not k.startswith("_")]
+            conn.executemany("INSERT INTO cache(path, data) VALUES (?, ?)", rows)
+            conn.commit()
+        return True
+    except (sqlite3.Error, OSError):
+        return False
+
+
 def load_cache(cache_path: str) -> dict:
     """
     加载缓存（v2.3 重写：支持分块自动合并读取）。
     读取主文件 _chunks 字段，自动加载所有 video_hash_cache_part*.json 分片并合并，
     解决分块后缓存读不全、命中失效问题。
     """
+    sqlite_cache = _load_sqlite_cache(cache_path)
+    if sqlite_cache is not None:
+        return sqlite_cache
     if not os.path.exists(cache_path):
         # 【改造】自动识别 .gz 压缩缓存
         gz_path = cache_path + ".gz"
@@ -1535,6 +1580,9 @@ def save_cache(cache_path: str, cache: dict, chunk_size: int = 500,
     避免 Ctrl+C 中断导致 JSON 截断损坏。支持 --compress-cache 输出 .gz 压缩包。
     """
     try:
+        if _save_sqlite_cache(cache_path, cache):
+            # SQLite 是快速读取的 sidecar；同时保留 JSON 以兼容旧工具。
+            pass
         items = [(k, v) for k, v in cache.items() if not k.startswith("_")]
         # 【改造】过滤掉 frames_pil 等不可序列化的大对象
         for k, v in items:
