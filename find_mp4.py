@@ -600,7 +600,7 @@ def parse_args():
     shared = _build_shared_parser()
 
     # 检查第一个有效参数是否为子命令
-    subcommands = {"scan", "clean-cache", "merge-cache", "verify-cache", "version", "help",
+    subcommands = {"scan", "clean-cache", "merge-cache", "verify-cache", "version", "help", "validate-plan",
                    "semantic-analyze", "dataset-filter", "cluster-scene",
                    "clear-semantic-cache", "dataset-split",
                    "duration-stat", "reload-labels", "test",
@@ -652,6 +652,9 @@ def parse_args():
     elif first_arg == "dataset-filter":
         parser.add_argument("purpose", nargs="?", default="",
                             help="数据集用途筛选，如 监控、自动驾驶")
+    elif first_arg == "validate-plan":
+        parser.add_argument("plan_file", nargs="?", default=CLEANUP_PLAN_FILE,
+                            help="要校验的 cleanup_plan.json 路径")
 
     args = parser.parse_args()
     args.command = first_arg
@@ -748,6 +751,40 @@ def load_config_file(config_path: str, args):
             continue
         setattr(args, dest, val)
     return args
+
+
+def _run_validate_plan(args):
+    """校验清理计划中的文件是否仍存在且大小未变化，不执行任何文件操作。"""
+    plan_file = os.path.abspath(os.path.expanduser(args.plan_file))
+    try:
+        with open(plan_file, "r", encoding="utf-8") as f:
+            plan = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"错误: 无法读取清理计划: {exc}")
+        return EXIT_BAD_ARGS
+    items = plan.get("items") if isinstance(plan, dict) else None
+    if not isinstance(items, list):
+        print("错误: 清理计划格式无效，缺少 items 列表")
+        return EXIT_BAD_ARGS
+    missing, changed, ready = [], [], []
+    for item in items:
+        path = item.get("source", "") if isinstance(item, dict) else ""
+        expected_size = item.get("size") if isinstance(item, dict) else None
+        try:
+            stat = os.stat(path)
+            if expected_size is not None and int(expected_size) != stat.st_size:
+                changed.append(path)
+            else:
+                ready.append(path)
+        except (OSError, ValueError, TypeError):
+            missing.append(path)
+    print(f"清理计划: {plan_file}")
+    print(f"总项目: {len(items)} | 可执行: {len(ready)} | 已变化: {len(changed)} | 不存在: {len(missing)}")
+    if changed:
+        print("[警告] 文件大小已变化，建议重新扫描后再清理。")
+    if missing:
+        print("[警告] 部分文件已不存在，已从可执行列表排除。")
+    return EXIT_OK if not changed and not missing else EXIT_PARSE_ERROR
 
 
 def validate_args(args):
@@ -4788,6 +4825,10 @@ def main():
     # --test
     if cmd == "test":
         _run_test(args)
+        return
+
+    if cmd == "validate-plan":
+        _global_exit_code = _run_validate_plan(args)
         return
 
     # 【v2.5 新增】--auto-classify AI 自动分类

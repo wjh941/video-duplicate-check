@@ -330,6 +330,7 @@ python find_mp4.py diff-scan --old-cache old.json --new-cache new.json
 | `--tag` | str | "" | 扫描时过滤带指定标签素材 |
 | `--similar-search` | str | "" | 语义检索指定画面视频 |
 | `--summary-json` | flag | False | 导出机器可读扫描摘要 JSON（含重复等级、质量分和可释放空间） |
+| `validate-plan` | command | - | 校验清理计划中文件是否仍存在且未变化，不执行删除 |
 
 ## 自动化集成与任务结果
 
@@ -337,6 +338,12 @@ python find_mp4.py diff-scan --old-cache old.json --new-cache new.json
 
 ```bash
 python find_mp4.py --dir D:\Videos --summary-json --output-dir D:\Reports
+```
+
+清理前可先校验计划，防止扫描后文件被替换或删除：
+
+```bash
+python find_mp4.py validate-plan D:\Reports\cleanup_plan.json
 ```
 
 外部程序只需读取 `D:\Reports\scan_summary.json`，即可获得扫描数量、失败数量、重复等级、可释放空间、文件格式分布和清理候选，不需要解析终端中文日志。`schema_version` 用于未来兼容升级；建议自动化程序先检查它再读取字段。摘要还包含 `extensions`（格式数量）、`quality_buckets`（重复等级统计）和 `status`（`clean`、`duplicates_found` 或 `completed_with_errors`），方便 NAS 看板和定时任务直接展示或触发告警。
