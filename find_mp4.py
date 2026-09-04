@@ -1249,9 +1249,19 @@ def apply_skip_low_quality(
     if removed == 0:
         return mp4_files, semantic_results, 0
 
-    filtered_semantic = {i: sd for i, sd in semantic_results.items() if i in keep_indices}
+    # 同步过滤文件列表并重建连续索引，避免后续 video_hashes 使用旧索引。
+    filtered_files = []
+    index_map = {}
+    for old_idx, file_info in enumerate(mp4_files):
+        if old_idx in keep_indices or old_idx not in semantic_results:
+            index_map[old_idx] = len(filtered_files)
+            filtered_files.append(file_info)
+    filtered_semantic = {
+        index_map[i]: sd for i, sd in semantic_results.items()
+        if i in keep_indices and i in index_map
+    }
     log(f"  [skip-low-quality] 过滤 {removed} 个低质量视频")
-    return mp4_files, filtered_semantic, removed
+    return filtered_files, filtered_semantic, removed
 
 
 def scan_mp4_files(args) -> list[dict]:
@@ -4790,7 +4800,7 @@ def main():
                 mp4_files, semantic_results,
             )
             if removed > 0:
-                # 同步过滤 video_hashes
+                # apply_skip_low_quality 已重建连续索引，按新索引同步哈希。
                 keep_idx = set(semantic_results.keys())
                 video_hashes = {idx: vh for idx, vh in video_hashes.items()
                                 if idx in keep_idx}
