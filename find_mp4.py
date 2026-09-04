@@ -3454,6 +3454,24 @@ def export_audit_log(output_dir: str, groups: list[dict], mp4_files: list[dict],
         log(f"[错误] 审计日志导出失败: {e}")
 
 
+def _video_quality_score(info: dict, hash_dict: dict = None) -> float:
+    """根据可用元数据估算保留建议分（0-100），不解码额外帧。"""
+    info = info or {}
+    hash_dict = hash_dict or {}
+    width = float(hash_dict.get("width", 0) or 0)
+    height = float(hash_dict.get("height", 0) or 0)
+    duration = float(hash_dict.get("duration", 0) or 0)
+    size = float(info.get("size", 0) or 0)
+    pixels = width * height
+    resolution_score = min(1.0, pixels / (1920 * 1080)) if pixels else 0.0
+    bitrate = size / duration if duration > 0 else 0.0
+    bitrate_score = min(1.0, bitrate / (8 * 1024 * 1024)) if bitrate else 0.0
+    # 分辨率优先，码率辅助；没有元数据时返回中性分而非误导性高分。
+    if resolution_score == 0 and bitrate_score == 0:
+        return 50.0
+    return round((resolution_score * 0.65 + bitrate_score * 0.35) * 100, 2)
+
+
 def _similarity_level(similarity: float) -> str:
     """将相似度转换为便于人工和自动化使用的等级。"""
     if similarity >= 0.98:
@@ -3481,6 +3499,7 @@ def export_summary_json(path: str, mp4_files: list[dict], video_hashes: dict,
                 "index": idx, "name": info.get("name", ""),
                 "path": info.get("path", ""),
                 "size": int(info.get("size", 0) or 0),
+                "quality_score": _video_quality_score(info, video_hashes.get(idx)),
                 "retained": retained,
             })
         similarities = group.get("similarities", {})
@@ -3501,6 +3520,7 @@ def export_summary_json(path: str, mp4_files: list[dict], video_hashes: dict,
         "bad_videos": bad_videos,
         "groups": group_rows,
         "semantic_analyzed": len(semantic_results or {}),
+        "quality_scoring": "metadata_resolution_bitrate_v1",
     }
     _atomic_write_text(path, json.dumps(summary, ensure_ascii=False, indent=2, default=str))
     log(f"[导出] 扫描摘要 JSON → {path}")
