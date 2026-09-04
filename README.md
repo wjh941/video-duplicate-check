@@ -4,7 +4,7 @@
 
 ## 核心特性
 
-- **双哈希融合**：pHash + dHash 提升比对精度，支持音频哈希辅助
+- **多格式视频扫描**：默认支持 MP4、MOV、MKV、AVI、WebM、M4V、FLV，可通过 `--ext` 自定义
 - **LSH 加速**：位掩码均匀分桶，O(n log n) 复杂度，万级视频秒级查重
 - **AI 语义分析**：CLIP 零样本场景识别、数据集用途判定、语义聚类
 - **AI 自动分类**：K-Means 聚类自动归类素材，dry-run 安全预览
@@ -74,8 +74,11 @@ pip install openpyxl
 ### 1. 基础查重
 
 ```bash
-# 最基础用法
+# 最基础用法（默认扫描 MP4/MOV/MKV/AVI/WebM/M4V/FLV）
 python find_mp4.py --dir D:\Videos
+
+# 只扫描指定格式
+python find_mp4.py --dir D:\Videos --ext mp4,mov,mkv
 
 # 快速粗筛
 python find_mp4.py --dir D:\Videos --fast

@@ -454,8 +454,11 @@ def _build_shared_parser():
     parser.add_argument("--export-hash", action="store_true", default=False)
     parser.add_argument("--gen-cleanup", action="store_true", default=False)
     # v2.1 新增参数
-    parser.add_argument("--ext", type=str, default="mp4",
-                        help="支持的视频后缀，逗号分隔，默认 mp4")
+    parser.add_argument(
+        "--ext", type=str,
+        default="mp4,mov,mkv,avi,webm,m4v,flv",
+        help="支持的视频后缀，逗号分隔，默认 mp4,mov,mkv,avi,webm,m4v,flv",
+    )
     parser.add_argument("--double-check", action="store_true", default=False,
                         help="二次校验模式")
     parser.add_argument("--lsh-buckets", type=int, default=32,
@@ -1272,7 +1275,7 @@ def scan_mp4_files(args) -> list[dict]:
     """
     folder_path = _resolve_path(args.dir)
     recursive = not args.no_recursive
-    ext_str = args.ext or "mp4"
+    ext_str = args.ext or "mp4,mov,mkv,avi,webm,m4v,flv"
     extensions = set(f".{e.lower().lstrip('.')}" for e in ext_str.split(","))
     exclude_folders = set(f.strip().lower() for f in (args.exclude_folder or "").split(",") if f.strip())
     min_size = _parse_size_str(args.exclude_size_lt)
