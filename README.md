@@ -150,7 +150,7 @@ python find_mp4.py dashboard
 python find_mp4.py full-report --dir D:\Videos --project-name "项目A"
 
 # HTML 转 PDF（需 reportlab）
-python find_mp4.py export-pdf --input full_report.html --project-name "项目A"
+python find_mp4.py export-pdf --html full_report.html --pdf 项目A.pdf --project-name "项目A"
 
 # 磁盘空间优化报告
 python find_mp4.py space-report --dir D:\Videos

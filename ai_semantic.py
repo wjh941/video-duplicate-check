@@ -227,6 +227,7 @@ def classify_video(
     preprocess,
     device: str,
     scene_thresh: float = 0.6,
+    frames: list = None,
 ) -> dict:
     """
     读取视频指定帧，提取特征，计算与各标签的相似度。
@@ -245,7 +246,8 @@ def classify_video(
     except ImportError:
         return {"scene": [], "object": [], "action": [], "confidence": 0.0}
 
-    frames = _sample_video_frames(video_path, num_frames)
+    if frames is None:
+        frames = _sample_video_frames(video_path, num_frames)
     if not frames:
         return {"scene": [], "object": [], "action": [], "confidence": 0.0}
 
@@ -566,7 +568,8 @@ def semantic_analyze_video(
 
     # 3. 分类
     cls_result = classify_video(
-        video_path, num_frames, model, preprocess, device, scene_thresh
+        video_path, num_frames, model, preprocess, device, scene_thresh,
+        frames=frames,
     )
 
     # 4. 用途判定

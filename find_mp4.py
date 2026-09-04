@@ -216,7 +216,7 @@ import threading
 import time
 import traceback
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeout
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED, TimeoutError as FutureTimeout
 from pathlib import Path
 from typing import Optional
 
@@ -700,15 +700,45 @@ def load_config_file(config_path: str, args):
         "tag": "tag",
         "similar_search": "similar-search",
     }
+    bool_fields = {
+        "double-check", "audio-check", "fast", "incremental", "keep-latest",
+        "keep-max-res", "keep-max-bitrate", "semantic", "cluster-semantic",
+        "export-dataset", "quiet", "dry-run", "duration-export", "no-store-frames",
+        "export-clean-list", "path-mask", "skip-low-quality", "link-mode",
+        "compress-cache", "hard-delete", "gen-restore", "classify-only", "execute",
+        "export-pdf",
+    }
+    def parse_bool(value: str) -> bool:
+        normalized = str(value).strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on", "是", "开启"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off", "否", "关闭", ""}:
+            return False
+        raise ValueError(f"配置布尔值无效: {value!r}")
+
     for config_key, arg_key in mapping.items():
-        if config_key in sec:
-            # 仅当命令行未显式传入时才覆盖
-            if getattr(args, arg_key.replace("-", "_"), None) in (None, False, 0):
-                val = sec[config_key]
-                dest = arg_key.replace("-", "_")
-                current = getattr(args, dest, None)
-                if current is None or current == 0 or current is False:
-                    setattr(args, dest, val)
+        if config_key not in sec:
+            continue
+        dest = arg_key.replace("-", "_")
+        current = getattr(args, dest, None)
+        # argparse 默认值不能区分“未传入”和默认值；保持历史行为，
+        # 但必须把配置值转换成正确类型，尤其是 false 不能成为 truthy 字符串。
+        if current not in (None, False, 0, ""):
+            continue
+        raw = sec[config_key]
+        try:
+            if arg_key in bool_fields:
+                val = parse_bool(raw)
+            elif dest in {"threshold", "min_sim", "scene_thresh", "cluster_thresh"}:
+                val = float(raw)
+            elif dest in {"frames", "workers", "min_res", "max_res", "n_clusters", "semantic_workers"}:
+                val = int(raw)
+            else:
+                val = raw.strip()
+        except ValueError as exc:
+            log(f"  [警告] 忽略无效配置 {config_key}: {exc}")
+            continue
+        setattr(args, dest, val)
     return args
 
 
@@ -1568,7 +1598,10 @@ def is_cache_valid(cache_entry: dict, file_info: dict, use_md5: bool = False) ->
     )
     if not basic_ok:
         return False
-    # v2.6 增强：MD5 校验（仅在缓存已有 md5 字段且启用时）
+    # 开启 MD5 时，旧缓存没有指纹必须重算，不能把旧条目当作已校验。
+    if use_md5 and not cache_entry.get("md5"):
+        return False
+    # v2.6 增强：MD5 校验
     if use_md5 and cache_entry.get("md5"):
         cached_md5 = cache_entry.get("md5")
         current_md5 = _compute_file_md5(file_info["path"])
@@ -1732,7 +1765,7 @@ def _compute_frame_hashes(gray_frame: np.ndarray) -> tuple:
     return phash, dhash
 
 
-def _compute_file_md5(file_path: str, chunk_size: int = 8192) -> str:
+def _compute_file_md5(file_path: str, chunk_size: int = 1024 * 1024) -> str:
     """
     计算文件 MD5 指纹（v2.6 新增）。
     用于增量扫描时判断文件内容是否真正变更，避免仅靠 mtime 漏检。
@@ -1999,11 +2032,12 @@ def extract_hashes_with_cache(
     incremental = args.incremental
     # 【改造 v2.4】--no-store-frames 不将预览帧持久化存入缓存，仅运行时临时复用降低内存占用
     store_frames = not getattr(args, "no_store_frames", False)
+    use_md5 = bool(getattr(args, "use_md5", False))
 
     # 缓存判定
     for i, file_info in enumerate(mp4_files):
         path = file_info["path"]
-        if use_cache and path in cache and is_cache_valid(cache[path], file_info):
+        if use_cache and path in cache and is_cache_valid(cache[path], file_info, use_md5=use_md5):
             try:
                 entry = cache[path]
                 video_hashes[i] = {
@@ -2038,72 +2072,82 @@ def extract_hashes_with_cache(
         # 【改造 v2.4】mininterval=1.0 节流刷新，降低机械硬盘IO阻塞
         pbar = _tqdm(total=total, desc="提取哈希", unit="视频", ncols=80, mininterval=1.0)
 
+    max_workers = max(1, int(max_workers or 1))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_idx = {}
-        for idx, file_info in to_compute.items():
+        # 有界提交：避免数万视频一次性创建 Future 导致内存峰值。
+        pending = {}
+        work_items = iter(to_compute.items())
+        for _ in range(min(max_workers, total)):
+            idx, file_info = next(work_items)
             future = executor.submit(
                 _extract_hashes_single, file_info["path"],
                 num_frames, double_check, use_audio, store_frames,
             )
-            future_to_idx[future] = (idx, file_info)
+            pending[future] = (idx, file_info)
 
-        for future in as_completed(future_to_idx):
-            idx, file_info = future_to_idx[future]
-            path = file_info["path"]
+        while pending:
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                idx, file_info = pending.pop(future)
+                path = file_info["path"]
 
-            try:
-                result_dict, err_type = future.result(timeout=FRAME_TIMEOUT)
-            except FutureTimeout:
-                result_dict, err_type = None, ERR_TIMEOUT
-            except Exception:
-                result_dict, err_type = None, ERR_DECODE_ERROR
-
-            if result_dict is not None:
-                video_hashes[idx] = result_dict
-                cache[path] = {
-                    "phash": [str(h) for h in result_dict["phash"]],
-                    "dhash": [str(h) for h in result_dict["dhash"]],
-                    "duration": result_dict["duration"],
-                    "width": result_dict["width"],
-                    "height": result_dict["height"],
-                    "fps": result_dict["fps"],
-                    "audio": [str(h) for h in result_dict["audio"]] if result_dict.get("audio") else None,
-                    "size": file_info["size"],
-                    "mtime": file_info["mtime"],
-                }
-                _global_cache = cache
-            else:
-                bad_videos.append({
-                    "path": path,
-                    "error_type": err_type or ERR_DECODE_ERROR,
-                })
-
-            completed += 1
-            mem_info = _get_memory_usage()
-            extra = f" 内存:{mem_info}" if mem_info else ""
-
-            if TQDM_AVAILABLE:
-                pbar.set_postfix_str(f"{extra}")
-                pbar.update(1)
-            else:
-                pct = completed / total * 100
-                log(f"  哈希进度: {completed}/{total} ({pct:.0f}%){extra}", "\r")
-
-            # 【改造 v2.4】缓存落地动态阈值：内存占用低于阈值每50条写缓存，内存超限立刻落地
-            current_mem_mb = 0.0
-            if mem_info:
                 try:
-                    current_mem_mb = float(mem_info.replace(" MB", ""))
-                except ValueError:
-                    pass
+                    result_dict, err_type = future.result(timeout=FRAME_TIMEOUT)
+                except FutureTimeout:
+                    result_dict, err_type = None, ERR_TIMEOUT
+                except Exception:
+                    result_dict, err_type = None, ERR_DECODE_ERROR
 
-            # 内存超限立即落地
-            if mem_limit > 0 and current_mem_mb > mem_limit:
-                save_cache(cache_path, cache)
-                log(f"  [内存管控] 已达 {mem_info}，强制落地缓存")
-            # 正常情况每50条写一次（降低磁盘IO）
-            elif use_cache and completed % 50 == 0:
-                save_cache(cache_path, cache)
+                if result_dict is not None:
+                    video_hashes[idx] = result_dict
+                    cache[path] = {
+                        "phash": [str(h) for h in result_dict["phash"]],
+                        "dhash": [str(h) for h in result_dict["dhash"]],
+                        "duration": result_dict["duration"],
+                        "width": result_dict["width"],
+                        "height": result_dict["height"],
+                        "fps": result_dict["fps"],
+                        "audio": [str(h) for h in result_dict["audio"]] if result_dict.get("audio") else None,
+                        "size": file_info["size"],
+                        "mtime": file_info["mtime"],
+                        "md5": _compute_file_md5(path) if use_md5 else None,
+                    }
+                    _global_cache = cache
+                else:
+                    bad_videos.append({"path": path, "error_type": err_type or ERR_DECODE_ERROR})
+
+                completed += 1
+                mem_info = _get_memory_usage()
+                extra = f" 内存:{mem_info}" if mem_info else ""
+                if TQDM_AVAILABLE:
+                    pbar.set_postfix_str(f"{extra}")
+                    pbar.update(1)
+                else:
+                    pct = completed / total * 100
+                    log(f"  哈希进度: {completed}/{total} ({pct:.0f}%){extra}", "\r")
+
+                current_mem_mb = 0.0
+                if mem_info:
+                    try:
+                        current_mem_mb = float(mem_info.replace(" MB", ""))
+                    except ValueError:
+                        pass
+                if mem_limit > 0 and current_mem_mb > mem_limit:
+                    save_cache(cache_path, cache)
+                    log(f"  [内存管控] 已达 {mem_info}，强制落地缓存")
+                elif use_cache and completed % 50 == 0:
+                    save_cache(cache_path, cache)
+
+                # 完成一个任务后才补充一个任务，保持队列有界。
+                try:
+                    next_idx, next_info = next(work_items)
+                except StopIteration:
+                    continue
+                next_future = executor.submit(
+                    _extract_hashes_single, next_info["path"],
+                    num_frames, double_check, use_audio, store_frames,
+                )
+                pending[next_future] = (next_idx, next_info)
 
     if TQDM_AVAILABLE:
         pbar.close()
@@ -2191,27 +2235,31 @@ def _hash_list_similarity(list1: list, list2: list) -> float:
 
 
 def _build_lsh_buckets(video_hashes: dict, num_buckets: int) -> dict:
-    """
-    构建 LSH 分桶索引（v2.4 修复：废弃字符串切片，改用位掩码均匀分桶）。
-    #【改造注释】旧方案 str(ph)[:bucket_bits] 导致大量视频挤入同一桶，比对速度暴跌。
-    新方案将 pHash 转为 int 后用位掩码取模分桶，保证均匀分布。
+    """构建保留召回率的 pHash 多 band 候选索引。
+
+    旧实现把整数哈希对桶数取模，这与汉明距离无关：两个几乎相同的
+    pHash 可能落入不同桶，导致真实重复被直接漏掉。这里把 64 bit pHash
+    切成多个 band，每个 band 单独建桶；近似哈希只要有一个 band 相同就
+    会成为候选。num_buckets 保留为兼容参数，仅用于限制每个 band 的桶数。
     """
     buckets = defaultdict(list)
+    bands = 4
+    bits_per_band = (HASH_SIZE ** 2) // bands
+    bucket_count = max(2, int(num_buckets or 32))
     for idx, hash_dict in video_hashes.items():
         phash_list = hash_dict.get("phash", [])
-        if phash_list:
-            # 【改造】将 pHash 字符串转为 int，用位掩码均匀分桶
-            ph_str = str(phash_list[0])
-            try:
-                # imagehash 的 hex 字符串转 int
-                ph_int = int(ph_str, 16) if all(c in '0123456789abcdef' for c in ph_str.lower()) else hash(ph_str)
-            except (ValueError, TypeError):
-                ph_int = hash(ph_str)
-            # 位掩码取模分桶，确保均匀分布
-            bucket_key = ph_int % num_buckets
-            buckets[bucket_key].append(idx)
-        else:
+        if not phash_list:
             buckets["__empty__"].append(idx)
+            continue
+        try:
+            value = int(str(phash_list[0]), 16)
+        except (ValueError, TypeError):
+            buckets["__empty__"].append(idx)
+            continue
+        mask = (1 << bits_per_band) - 1
+        for band in range(bands):
+            band_value = (value >> (band * bits_per_band)) & mask
+            buckets[(band, band_value % bucket_count)].append(idx)
     return buckets
 
 
@@ -2265,7 +2313,16 @@ def find_similar_pairs(
         # 计算实际需要比对的对数（仅桶内两两）
         actual_pairs = sum(len(v) * (len(v) - 1) // 2 for v in buckets.values() if len(v) > 1)
         log(f"  LSH 优化: 实际比对 {actual_pairs} 对（原 {total_pairs} 对，节省 {max(0, total_pairs-actual_pairs)} 对）")
-        total_pairs = max(total_pairs, actual_pairs)
+        # 多 band 可能让同一对视频进入多个桶，按唯一候选对计数。
+        # 多 band 下同一对可能进入多个桶，去重后只比较一次。
+        candidate_pairs = set()
+        for bucket_indices in buckets.values():
+            if len(bucket_indices) < 2:
+                continue
+            for pos, left in enumerate(bucket_indices):
+                for right in bucket_indices[pos + 1:]:
+                    candidate_pairs.add((min(left, right), max(left, right)))
+        total_pairs = len(candidate_pairs)
 
     if TQDM_AVAILABLE:
         # 【改造 v2.4】mininterval=1.0 节流刷新，降低机械硬盘IO阻塞
@@ -2273,50 +2330,42 @@ def find_similar_pairs(
 
     # 【改造 v2.4】LSH 模式下仅桶内两两比对；非 LSH 模式全量两两
     if use_lsh:
-        for bucket_key, bucket_indices in buckets.items():
-            # 【改造 v2.4】空桶直接跳过比对
-            if not bucket_indices or len(bucket_indices) < 2:
+        for idx_a, idx_b in sorted(candidate_pairs):
+            pair_key = (min(idx_a, idx_b), max(idx_a, idx_b))
+            if skip_pairs and pair_key in skip_pairs:
+                compared += 1
+                skipped_count += 1
+                if TQDM_AVAILABLE:
+                    pbar.update(1)
                 continue
-            # 桶内两两比对
-            bn = len(bucket_indices)
-            for i in range(bn):
-                for j in range(i + 1, bn):
-                    idx_a, idx_b = bucket_indices[i], bucket_indices[j]
-                    pair_key = (min(idx_a, idx_b), max(idx_a, idx_b))
-                    if skip_pairs and pair_key in skip_pairs:
-                        compared += 1
-                        skipped_count += 1
-                        if TQDM_AVAILABLE:
-                            pbar.update(1)
-                        continue
-                    # 时长预筛
-                    if _duration_too_different(idx_a, idx_b):
-                        duration_skip_count += 1
-                        compared += 1
-                        if TQDM_AVAILABLE:
-                            pbar.update(1)
-                        continue
-                    hashes_a = video_hashes[idx_a]
-                    hashes_b = video_hashes[idx_b]
-                    if not hashes_a or not hashes_b:
-                        compared += 1
-                        if TQDM_AVAILABLE:
-                            pbar.update(1)
-                        continue
-                    result = compute_similarity(hashes_a, hashes_b, weights=weights)
-                    compared += 1
-                    if TQDM_AVAILABLE:
-                        pbar.update(1)
-                    if result["similarity"] >= threshold:
-                        similar_pairs.append({
-                            "idx_a": idx_a, "idx_b": idx_b,
-                            "name_a": mp4_files[idx_a]["name"],
-                            "name_b": mp4_files[idx_b]["name"],
-                            "path_a": mp4_files[idx_a]["path"],
-                            "path_b": mp4_files[idx_b]["path"],
-                            "distance": result["distance"],
-                            "similarity": result["similarity"],
-                        })
+            # 时长预筛
+            if _duration_too_different(idx_a, idx_b):
+                duration_skip_count += 1
+                compared += 1
+                if TQDM_AVAILABLE:
+                    pbar.update(1)
+                continue
+            hashes_a = video_hashes[idx_a]
+            hashes_b = video_hashes[idx_b]
+            if not hashes_a or not hashes_b:
+                compared += 1
+                if TQDM_AVAILABLE:
+                    pbar.update(1)
+                continue
+            result = compute_similarity(hashes_a, hashes_b, weights=weights)
+            compared += 1
+            if TQDM_AVAILABLE:
+                pbar.update(1)
+            if result["similarity"] >= threshold:
+                similar_pairs.append({
+                    "idx_a": idx_a, "idx_b": idx_b,
+                    "name_a": mp4_files[idx_a]["name"],
+                    "name_b": mp4_files[idx_b]["name"],
+                    "path_a": mp4_files[idx_a]["path"],
+                    "path_b": mp4_files[idx_b]["path"],
+                    "distance": result["distance"],
+                    "similarity": result["similarity"],
+                })
     else:
         for i in range(n):
             for j in range(i + 1, n):
@@ -2387,18 +2436,18 @@ def pre_filter_by_metadata(mp4_files: list[dict]) -> tuple:
         key = (f["size"], round(f["mtime"], 0))
         groups.setdefault(key, []).append(i)
 
-    meta_dups = []
-    skip_pairs = set()
+    # 大小+mtime 只能作为候选提示，不能证明文件内容相同。
+    # 过去这里把这些 pair 跳过哈希并直接判定重复，会误报“同大小同秒修改”的视频。
+    meta_candidates = []
     for key, indices in groups.items():
         if len(indices) > 1:
             indices.sort()
             for a in range(len(indices)):
                 for b in range(a + 1, len(indices)):
-                    pair = (indices[a], indices[b])
-                    meta_dups.append(pair)
-                    skip_pairs.add(pair)
+                    meta_candidates.append((indices[a], indices[b]))
 
-    return meta_dups, skip_pairs
+    # 保留返回结构兼容调用方，但不再跳过真实内容比对。
+    return meta_candidates, set()
 
 
 # ============================================================
@@ -4040,7 +4089,11 @@ def _run_test(args):
 
     # 测试1: LSH分桶均匀性
     try:
-        test_hashes = {i: {"phash": [f"{i:016x}"]} for i in range(100)}
+        # 使用分散的 64-bit 指纹，验证多 band 索引不会退化成单一大桶。
+        test_hashes = {
+            i: {"phash": [f"{((i * 0x9E3779B97F4A7C15) & ((1 << 64) - 1)):016x}"]}
+            for i in range(100)
+        }
         buckets = _build_lsh_buckets(test_hashes, 32)
         max_bucket = max(len(v) for v in buckets.values())
         if max_bucket < 20:  # 均匀分布下每桶应<10
@@ -4450,11 +4503,10 @@ def main():
         _sys.argv = _run_interactive_wizard()
         args = parse_args()
 
-    validate_args(args)
-
-    # 加载配置文件
+    # 先加载配置，再统一校验；否则配置注入的字符串/非法范围会绕过校验。
     if args.config:
         args = load_config_file(args.config, args)
+    validate_args(args)
 
     cmd = getattr(args, "command", "scan")
 
@@ -4588,12 +4640,16 @@ def main():
         _run_gen_restore(args)
         return
 
-    # v2.4 安全：--hard-delete 二次确认
-    if getattr(args, "hard_delete", False) and not _quiet_mode:
+    # v2.4 安全：永久删除无论 quiet 与否都必须显式确认。
+    if getattr(args, "hard_delete", False):
         print("\n" + "=" * 60)
         print("  [警告] --hard-delete 将生成永久删除脚本！")
         print("  此操作不可逆，被删除的视频无法恢复。")
         print("=" * 60)
+        # 非交互终端不能安全确认，默认拒绝，防止脚本/看板绕过保护。
+        if not sys.stdin.isatty():
+            print("  非交互终端拒绝 --hard-delete；请在交互终端输入 YES。")
+            return
         confirm = input("  确认要生成永久删除脚本吗？(输入 YES 继续): ")
         if confirm.strip().upper() != "YES":
             print("  已取消永久删除脚本生成。")
@@ -4746,7 +4802,7 @@ def main():
             log("\n[步骤3] 快速预筛（元数据匹配）...", force=True)
             meta_dups, skip_pairs = pre_filter_by_metadata(mp4_files)
             if meta_dups:
-                log(f"  发现 {len(meta_dups)} 对元数据完全一致的视频，将直接判定重复", force=True)
+                log(f"  发现 {len(meta_dups)} 对元数据相同的视频，将继续进行内容校验", force=True)
 
         # 4. 相似度比对
         similar_pairs = []
@@ -4765,17 +4821,8 @@ def main():
                 video_hashes, mp4_files, threshold, skip_pairs, lsh, weights=weights
             )
 
-            # 元数据预筛对加入
-            for idx_a, idx_b in meta_dups:
-                similar_pairs.append({
-                    "idx_a": idx_a, "idx_b": idx_b,
-                    "name_a": mp4_files[idx_a]["name"],
-                    "name_b": mp4_files[idx_b]["name"],
-                    "path_a": mp4_files[idx_a]["path"],
-                    "path_b": mp4_files[idx_b]["path"],
-                    "distance": 0.0, "similarity": 1.0,
-                })
-
+            # 元数据相同仅作为候选提示，真实重复必须通过视觉/音频相似度确认。
+            # 不再直接注入 similarity=1.0，避免同大小同时间戳文件误报。
             groups = build_groups(similar_pairs, mp4_files, video_hashes, keep_strategy)
 
         # 5. 导出
