@@ -349,7 +349,7 @@ python find_mp4.py validate-plan D:\Reports\cleanup_plan.json
 # 默认只预览，不移动文件
 python find_mp4.py execute-plan D:\Reports\cleanup_plan.json
 
-# 确认后移动到 D:\Reports\trash\时间戳\，不会永久删除
+# 确认后移动到 D:\Reports\trash\时间戳_随机ID\，不会永久删除；会生成唯一 operation_id
 python find_mp4.py execute-plan D:\Reports\cleanup_plan.json --confirm-cleanup
 
 # 根据隔离区 operation.json 恢复文件（默认预览）

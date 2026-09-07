@@ -214,6 +214,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import uuid
 import time
 import traceback
 from collections import defaultdict
@@ -788,7 +789,8 @@ def _run_execute_plan(args):
     if not getattr(args, "confirm_cleanup", False):
         print("预览模式：未移动文件。执行时添加 --confirm-cleanup。")
         return EXIT_OK
-    trash_dir = os.path.join(os.path.dirname(plan_file), "trash", time.strftime("%Y%m%d_%H%M%S"))
+    operation_id = time.strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
+    trash_dir = os.path.join(os.path.dirname(plan_file), "trash", operation_id)
     os.makedirs(trash_dir, exist_ok=True)
     moved = 0
     log_path = os.path.join(trash_dir, "operation.json")
@@ -797,11 +799,16 @@ def _run_execute_plan(args):
         target = os.path.join(trash_dir, f"{moved:05d}_{os.path.basename(source)}")
         try:
             shutil.move(source, target)
-            operations.append({"source": source, "target": target, "size": item.get("size", 0)})
+            operations.append({"source": source, "target": target, "size": item.get("size", 0),
+                               "mtime": item.get("mtime"), "status": "moved"})
             moved += 1
         except (OSError, shutil.Error) as exc:
             operations.append({"source": source, "target": target, "error": str(exc)})
-    _atomic_write_text(log_path, json.dumps({"schema_version": 1, "operations": operations}, ensure_ascii=False, indent=2))
+    _atomic_write_text(log_path, json.dumps({"schema_version": 2, "operation_id": operation_id,
+                                                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                                                "plan_file": plan_file, "operations": operations},
+                                               ensure_ascii=False, indent=2))
+    print(f"操作编号: {operation_id}")
     print(f"已安全移动: {moved} 个")
     print(f"恢复记录: {log_path}")
     return EXIT_OK if moved == len(ready) else EXIT_PARSE_ERROR
@@ -825,6 +832,14 @@ def _run_restore_operation(args):
         if not source or not target or item.get("error"):
             continue
         if os.path.exists(target) and not os.path.exists(source):
+            expected_size = item.get("size")
+            try:
+                if expected_size is not None and os.path.getsize(target) != int(expected_size):
+                    conflicts.append(target)
+                    continue
+            except (OSError, ValueError, TypeError):
+                conflicts.append(target)
+                continue
             ready.append((source, target))
         elif os.path.exists(source):
             conflicts.append(source)
