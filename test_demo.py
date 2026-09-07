@@ -170,7 +170,7 @@ def test_param_conflict():
 
 def test_ai_degradation():
     """测试无AI依赖时降级"""
-    global _passed, _skipped
+    global _passed, _failed, _skipped
     try:
         import subprocess
         result = subprocess.run(

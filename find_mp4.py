@@ -458,6 +458,8 @@ def _build_shared_parser():
     parser.add_argument("--summary-json", action="store_true", default=False,
                         help="导出机器可读的扫描摘要 JSON，便于脚本和看板集成")
     parser.add_argument("--gen-cleanup", action="store_true", default=False)
+    parser.add_argument("--confirm-cleanup", action="store_true", default=False,
+                        help="确认执行清理计划（仅 execute-plan 使用，默认仅预览）")
     # v2.1 新增参数
     parser.add_argument(
         "--ext", type=str,
@@ -600,7 +602,7 @@ def parse_args():
     shared = _build_shared_parser()
 
     # 检查第一个有效参数是否为子命令
-    subcommands = {"scan", "clean-cache", "merge-cache", "verify-cache", "version", "help", "validate-plan",
+    subcommands = {"scan", "clean-cache", "merge-cache", "verify-cache", "version", "help", "validate-plan", "execute-plan",
                    "semantic-analyze", "dataset-filter", "cluster-scene",
                    "clear-semantic-cache", "dataset-split",
                    "duration-stat", "reload-labels", "test",
@@ -652,9 +654,9 @@ def parse_args():
     elif first_arg == "dataset-filter":
         parser.add_argument("purpose", nargs="?", default="",
                             help="数据集用途筛选，如 监控、自动驾驶")
-    elif first_arg == "validate-plan":
+    elif first_arg in ("validate-plan", "execute-plan"):
         parser.add_argument("plan_file", nargs="?", default=CLEANUP_PLAN_FILE,
-                            help="要校验的 cleanup_plan.json 路径")
+                            help="要处理的 cleanup_plan.json 路径")
 
     args = parser.parse_args()
     args.command = first_arg
@@ -751,6 +753,53 @@ def load_config_file(config_path: str, args):
             continue
         setattr(args, dest, val)
     return args
+
+
+def _run_execute_plan(args):
+    """安全执行清理计划：默认预览，确认后移动到隔离目录，不永久删除。"""
+    plan_file = os.path.abspath(os.path.expanduser(args.plan_file))
+    try:
+        with open(plan_file, "r", encoding="utf-8") as f:
+            plan = json.load(f)
+        items = plan.get("items", [])
+        if not isinstance(items, list):
+            raise ValueError("items 不是列表")
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(f"错误: 清理计划无效: {exc}")
+        return EXIT_BAD_ARGS
+    ready = []
+    for item in items:
+        if not isinstance(item, dict) or not item.get("source"):
+            continue
+        source = os.path.abspath(os.path.expanduser(item["source"]))
+        try:
+            stat = os.stat(source)
+            if int(item.get("size", stat.st_size)) == stat.st_size:
+                ready.append((source, item))
+        except (OSError, ValueError, TypeError):
+            continue
+    print(f"清理计划: {plan_file}")
+    print(f"可执行项目: {len(ready)}/{len(items)}")
+    if not getattr(args, "confirm_cleanup", False):
+        print("预览模式：未移动文件。执行时添加 --confirm-cleanup。")
+        return EXIT_OK
+    trash_dir = os.path.join(os.path.dirname(plan_file), "trash", time.strftime("%Y%m%d_%H%M%S"))
+    os.makedirs(trash_dir, exist_ok=True)
+    moved = 0
+    log_path = os.path.join(trash_dir, "operation.json")
+    operations = []
+    for source, item in ready:
+        target = os.path.join(trash_dir, f"{moved:05d}_{os.path.basename(source)}")
+        try:
+            shutil.move(source, target)
+            operations.append({"source": source, "target": target, "size": item.get("size", 0)})
+            moved += 1
+        except (OSError, shutil.Error) as exc:
+            operations.append({"source": source, "target": target, "error": str(exc)})
+    _atomic_write_text(log_path, json.dumps({"schema_version": 1, "operations": operations}, ensure_ascii=False, indent=2))
+    print(f"已安全移动: {moved} 个")
+    print(f"恢复记录: {log_path}")
+    return EXIT_OK if moved == len(ready) else EXIT_PARSE_ERROR
 
 
 def _run_validate_plan(args):
@@ -4829,6 +4878,9 @@ def main():
 
     if cmd == "validate-plan":
         _global_exit_code = _run_validate_plan(args)
+        return
+    if cmd == "execute-plan":
+        _global_exit_code = _run_execute_plan(args)
         return
 
     # 【v2.5 新增】--auto-classify AI 自动分类
