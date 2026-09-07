@@ -351,6 +351,12 @@ python find_mp4.py execute-plan D:\Reports\cleanup_plan.json
 
 # 确认后移动到 D:\Reports\trash\时间戳\，不会永久删除
 python find_mp4.py execute-plan D:\Reports\cleanup_plan.json --confirm-cleanup
+
+# 根据隔离区 operation.json 恢复文件（默认预览）
+python find_mp4.py restore-operation D:\Reports\trash\时间戳\operation.json
+
+# 确认恢复
+python find_mp4.py restore-operation D:\Reports\trash\时间戳\operation.json --confirm-restore
 ```
 
 外部程序只需读取 `D:\Reports\scan_summary.json`，即可获得扫描数量、失败数量、重复等级、可释放空间、文件格式分布和清理候选，不需要解析终端中文日志。`schema_version` 用于未来兼容升级；建议自动化程序先检查它再读取字段。摘要还包含 `extensions`（格式数量）、`quality_buckets`（重复等级统计）和 `status`（`clean`、`duplicates_found` 或 `completed_with_errors`），方便 NAS 看板和定时任务直接展示或触发告警。

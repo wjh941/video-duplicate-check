@@ -602,7 +602,7 @@ def parse_args():
     shared = _build_shared_parser()
 
     # 检查第一个有效参数是否为子命令
-    subcommands = {"scan", "clean-cache", "merge-cache", "verify-cache", "version", "help", "validate-plan", "execute-plan",
+    subcommands = {"scan", "clean-cache", "merge-cache", "verify-cache", "version", "help", "validate-plan", "execute-plan", "restore-operation",
                    "semantic-analyze", "dataset-filter", "cluster-scene",
                    "clear-semantic-cache", "dataset-split",
                    "duration-stat", "reload-labels", "test",
@@ -657,6 +657,11 @@ def parse_args():
     elif first_arg in ("validate-plan", "execute-plan"):
         parser.add_argument("plan_file", nargs="?", default=CLEANUP_PLAN_FILE,
                             help="要处理的 cleanup_plan.json 路径")
+    elif first_arg == "restore-operation":
+        parser.add_argument("operation_file", nargs="?", default="operation.json",
+                            help="要恢复的 operation.json 路径")
+        parser.add_argument("--confirm-restore", action="store_true", default=False,
+                            help="确认恢复文件（默认仅预览）")
 
     args = parser.parse_args()
     args.command = first_arg
@@ -800,6 +805,44 @@ def _run_execute_plan(args):
     print(f"已安全移动: {moved} 个")
     print(f"恢复记录: {log_path}")
     return EXIT_OK if moved == len(ready) else EXIT_PARSE_ERROR
+
+
+def _run_restore_operation(args):
+    """从 operation.json 恢复安全移动的文件，默认仅预览。"""
+    operation_file = os.path.abspath(os.path.expanduser(args.operation_file))
+    try:
+        with open(operation_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        operations = data.get("operations", [])
+        if not isinstance(operations, list):
+            raise ValueError("operations 不是列表")
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(f"错误: 恢复记录无效: {exc}")
+        return EXIT_BAD_ARGS
+    ready, conflicts = [], []
+    for item in operations:
+        source, target = item.get("source"), item.get("target")
+        if not source or not target or item.get("error"):
+            continue
+        if os.path.exists(target) and not os.path.exists(source):
+            ready.append((source, target))
+        elif os.path.exists(source):
+            conflicts.append(source)
+    print(f"恢复记录: {operation_file}")
+    print(f"可恢复: {len(ready)} | 冲突/已存在: {len(conflicts)}")
+    if not getattr(args, "confirm_restore", False):
+        print("预览模式：未恢复文件。执行时添加 --confirm-restore。")
+        return EXIT_OK
+    restored = 0
+    for source, target in ready:
+        try:
+            os.makedirs(os.path.dirname(source) or ".", exist_ok=True)
+            shutil.move(target, source)
+            restored += 1
+        except (OSError, shutil.Error) as exc:
+            print(f"[警告] 恢复失败: {target} -> {source}: {exc}")
+    print(f"已恢复: {restored} 个")
+    return EXIT_OK if restored == len(ready) and not conflicts else EXIT_PARSE_ERROR
 
 
 def _run_validate_plan(args):
@@ -4881,6 +4924,9 @@ def main():
         return
     if cmd == "execute-plan":
         _global_exit_code = _run_execute_plan(args)
+        return
+    if cmd == "restore-operation":
+        _global_exit_code = _run_restore_operation(args)
         return
 
     # 【v2.5 新增】--auto-classify AI 自动分类

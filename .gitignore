@@ -57,6 +57,7 @@ cleanup_duplicates.bat
 cleanup_duplicates.sh
 cleanup_plan.json
 trash/
+operation.json
 
 # 日志
 run_log.txt
