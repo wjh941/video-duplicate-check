@@ -603,7 +603,7 @@ def parse_args():
     shared = _build_shared_parser()
 
     # 检查第一个有效参数是否为子命令
-    subcommands = {"scan", "clean-cache", "merge-cache", "verify-cache", "version", "help", "validate-plan", "execute-plan", "restore-operation",
+    subcommands = {"scan", "clean-cache", "merge-cache", "verify-cache", "version", "help", "validate-plan", "execute-plan", "restore-operation", "list-operations",
                    "semantic-analyze", "dataset-filter", "cluster-scene",
                    "clear-semantic-cache", "dataset-split",
                    "duration-stat", "reload-labels", "test",
@@ -663,6 +663,9 @@ def parse_args():
                             help="要恢复的 operation.json 路径")
         parser.add_argument("--confirm-restore", action="store_true", default=False,
                             help="确认恢复文件（默认仅预览）")
+    elif first_arg == "list-operations":
+        parser.add_argument("trash_dir", nargs="?", default="trash",
+                            help="隔离区目录，默认当前目录下 trash")
 
     args = parser.parse_args()
     args.command = first_arg
@@ -812,6 +815,35 @@ def _run_execute_plan(args):
     print(f"已安全移动: {moved} 个")
     print(f"恢复记录: {log_path}")
     return EXIT_OK if moved == len(ready) else EXIT_PARSE_ERROR
+
+
+def _run_list_operations(args):
+    """列出隔离区中的清理操作，便于选择恢复记录。"""
+    root = os.path.abspath(os.path.expanduser(args.trash_dir))
+    if not os.path.isdir(root):
+        print(f"隔离区不存在: {root}")
+        return EXIT_BAD_ARGS
+    rows = []
+    for current, _, files in os.walk(root):
+        if "operation.json" not in files:
+            continue
+        path = os.path.join(current, "operation.json")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            operations = data.get("operations", [])
+            moved = [item for item in operations if item.get("status") == "moved" or not item.get("error")]
+            total_bytes = sum(int(item.get("size", 0) or 0) for item in moved)
+            rows.append((data.get("operation_id", os.path.basename(current)),
+                         data.get("created_at", "-"), len(moved), total_bytes, path))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            continue
+    rows.sort(reverse=True)
+    print(f"隔离区: {root}")
+    print(f"操作数: {len(rows)}")
+    for operation_id, created_at, count, total_bytes, path in rows:
+        print(f"{operation_id} | {created_at} | {count} 个 | {_format_size(total_bytes)} | {path}")
+    return EXIT_OK
 
 
 def _run_restore_operation(args):
@@ -4942,6 +4974,9 @@ def main():
         return
     if cmd == "restore-operation":
         _global_exit_code = _run_restore_operation(args)
+        return
+    if cmd == "list-operations":
+        _global_exit_code = _run_list_operations(args)
         return
 
     # 【v2.5 新增】--auto-classify AI 自动分类
