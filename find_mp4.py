@@ -603,7 +603,7 @@ def parse_args():
     shared = _build_shared_parser()
 
     # 检查第一个有效参数是否为子命令
-    subcommands = {"scan", "clean-cache", "merge-cache", "verify-cache", "version", "help", "validate-plan", "execute-plan", "restore-operation", "list-operations",
+    subcommands = {"scan", "clean-cache", "merge-cache", "verify-cache", "version", "help", "validate-plan", "execute-plan", "restore-operation", "list-operations", "purge-operations",
                    "semantic-analyze", "dataset-filter", "cluster-scene",
                    "clear-semantic-cache", "dataset-split",
                    "duration-stat", "reload-labels", "test",
@@ -663,9 +663,13 @@ def parse_args():
                             help="要恢复的 operation.json 路径")
         parser.add_argument("--confirm-restore", action="store_true", default=False,
                             help="确认恢复文件（默认仅预览）")
-    elif first_arg == "list-operations":
+    elif first_arg in ("list-operations", "purge-operations"):
         parser.add_argument("trash_dir", nargs="?", default="trash",
                             help="隔离区目录，默认当前目录下 trash")
+        parser.add_argument("--older-than", type=int, default=30,
+                            help="仅处理超过指定天数的操作，默认 30")
+        parser.add_argument("--confirm-purge", action="store_true", default=False,
+                            help="确认永久删除过期隔离区（默认仅预览）")
 
     args = parser.parse_args()
     args.command = first_arg
@@ -815,6 +819,45 @@ def _run_execute_plan(args):
     print(f"已安全移动: {moved} 个")
     print(f"恢复记录: {log_path}")
     return EXIT_OK if moved == len(ready) else EXIT_PARSE_ERROR
+
+
+def _run_purge_operations(args):
+    """统计并可选清理过期隔离操作，默认只预览。"""
+    root = os.path.abspath(os.path.expanduser(args.trash_dir))
+    cutoff = time.time() - max(0, args.older_than) * 86400
+    candidates, total_bytes = [], 0
+    if not os.path.isdir(root):
+        print(f"隔离区不存在: {root}")
+        return EXIT_BAD_ARGS
+    for current, _, files in os.walk(root):
+        if "operation.json" not in files:
+            continue
+        operation_file = os.path.join(current, "operation.json")
+        try:
+            if os.path.getmtime(operation_file) > cutoff:
+                continue
+            with open(operation_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            operations = data.get("operations", [])
+            size = sum(int(x.get("size", 0) or 0) for x in operations if not x.get("error"))
+            candidates.append((current, size))
+            total_bytes += size
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            continue
+    print(f"隔离区: {root}")
+    print(f"过期阈值: {args.older_than} 天 | 候选操作: {len(candidates)} | 空间: {_format_size(total_bytes)}")
+    if not args.confirm_purge:
+        print("预览模式：未删除。执行时添加 --confirm-purge。")
+        return EXIT_OK
+    removed = 0
+    for path, _ in candidates:
+        try:
+            shutil.rmtree(path)
+            removed += 1
+        except OSError as exc:
+            print(f"[警告] 删除失败: {path}: {exc}")
+    print(f"已删除过期操作: {removed} 个")
+    return EXIT_OK if removed == len(candidates) else EXIT_PARSE_ERROR
 
 
 def _run_list_operations(args):
@@ -4977,6 +5020,9 @@ def main():
         return
     if cmd == "list-operations":
         _global_exit_code = _run_list_operations(args)
+        return
+    if cmd == "purge-operations":
+        _global_exit_code = _run_purge_operations(args)
         return
 
     # 【v2.5 新增】--auto-classify AI 自动分类

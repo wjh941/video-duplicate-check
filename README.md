@@ -334,6 +334,7 @@ python find_mp4.py diff-scan --old-cache old.json --new-cache new.json
 | `execute-plan` | command | - | 默认预览清理计划；加 `--confirm-cleanup` 后移动到隔离目录 |
 | `restore-operation` | command | - | 从 `operation.json` 恢复隔离文件 |
 | `list-operations` | command | - | 列出隔离区的历史清理操作 |
+| `purge-operations` | command | - | 预览或永久清理过期隔离操作 |
 
 ## 自动化集成与任务结果
 
@@ -362,6 +363,12 @@ python find_mp4.py restore-operation D:\Reports\trash\时间戳_随机ID\operati
 
 # 列出隔离区中的全部操作
 python find_mp4.py list-operations D:\Reports\trash
+
+# 预览超过 30 天的隔离操作（默认不删除）
+python find_mp4.py purge-operations D:\Reports\trash --older-than 30
+
+# 确认永久删除过期隔离操作（不可恢复，请谨慎）
+python find_mp4.py purge-operations D:\Reports\trash --older-than 30 --confirm-purge
 ```
 
 外部程序只需读取 `D:\Reports\scan_summary.json`，即可获得扫描数量、失败数量、重复等级、可释放空间、文件格式分布和清理候选，不需要解析终端中文日志。`schema_version` 用于未来兼容升级；建议自动化程序先检查它再读取字段。摘要还包含 `extensions`（格式数量）、`quality_buckets`（重复等级统计）和 `status`（`clean`、`duplicates_found` 或 `completed_with_errors`），方便 NAS 看板和定时任务直接展示或触发告警。
