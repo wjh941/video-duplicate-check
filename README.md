@@ -358,7 +358,7 @@ python find_mp4.py execute-plan D:\Reports\cleanup_plan.json --confirm-cleanup
 # 根据隔离区 operation.json 恢复文件（默认预览）
 python find_mp4.py restore-operation D:\Reports\trash\时间戳\operation.json
 
-# 确认恢复
+# 确认恢复（恢复前校验大小和 SHA-256，内容变化会跳过）
 python find_mp4.py restore-operation D:\Reports\trash\时间戳_随机ID\operation.json --confirm-restore
 
 # 列出隔离区中的全部操作

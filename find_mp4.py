@@ -807,7 +807,8 @@ def _run_execute_plan(args):
         try:
             shutil.move(source, target)
             operations.append({"source": source, "target": target, "size": item.get("size", 0),
-                               "mtime": item.get("mtime"), "status": "moved"})
+                               "mtime": item.get("mtime"), "sha256": _compute_file_sha256(target),
+                               "status": "moved"})
             moved += 1
         except (OSError, shutil.Error) as exc:
             operations.append({"source": source, "target": target, "error": str(exc)})
@@ -910,6 +911,10 @@ def _run_restore_operation(args):
             expected_size = item.get("size")
             try:
                 if expected_size is not None and os.path.getsize(target) != int(expected_size):
+                    conflicts.append(target)
+                    continue
+                expected_sha256 = item.get("sha256")
+                if expected_sha256 and _compute_file_sha256(target) != expected_sha256:
                     conflicts.append(target)
                     continue
             except (OSError, ValueError, TypeError):
@@ -2054,6 +2059,19 @@ def _compute_frame_hashes(gray_frame: np.ndarray) -> tuple:
     phash = imagehash.phash(pil_img, hash_size=HASH_SIZE)
     dhash = imagehash.dhash(pil_img, hash_size=HASH_SIZE)
     return phash, dhash
+
+
+def _compute_file_sha256(file_path: str, chunk_size: int = 1024 * 1024) -> str:
+    """Calculate a full-file SHA-256 fingerprint for operation verification."""
+    import hashlib
+    digest = hashlib.sha256()
+    try:
+        with open(file_path, "rb") as stream:
+            for chunk in iter(lambda: stream.read(chunk_size), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except (IOError, OSError, PermissionError):
+        return ""
 
 
 def _compute_file_md5(file_path: str, chunk_size: int = 1024 * 1024) -> str:
