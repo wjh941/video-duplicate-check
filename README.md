@@ -1,164 +1,229 @@
-# MP4 视频相似度查重工具 v2.6
+# MP4 视频相似度查重工具
 
-基于感知哈希（pHash + dHash）+ AI 语义分析的视频重复检测与数据集标注工具，支持 LSH 加速、增量扫描、缓存管理、多格式导出、安全清理脚本、场景聚类、训练集清单导出、AI 自动分类、可视化看板、批量处理、增强报告系统。
+基于感知哈希（pHash + dHash）的本地视频重复检测命令行工具：扫描指定目录，找出画面相似或重复的视频，生成对比报告和可恢复的安全清理方案。适合清理手机、相机、NAS 中堆积的重复素材，也支持为计算机视觉训练集做去重和标注。可选启用 CLIP 语义分析、Streamlit 可视化看板、批量处理与报告生成工具。
 
-## 核心特性
+## 功能特性
 
-- **多格式视频扫描**：默认支持 MP4、MOV、MKV、AVI、WebM、M4V、FLV，可通过 `--ext` 自定义
-- **LSH 加速**：位掩码均匀分桶，O(n log n) 复杂度，万级视频秒级查重
-- **AI 语义分析**：CLIP 零样本场景识别、数据集用途判定、语义聚类
-- **AI 自动分类**：K-Means 聚类自动归类素材，dry-run 安全预览
-- **可视化看板**：Streamlit 交互式看板，8 大面板全方位可视化管理
-- **增强报告系统**：综合 HTML 报告、PDF 导出、磁盘空间分析、质检报告
-- **批量处理**：多目录批量扫描、缩略图集、硬链接替换、素材整理
-- **安全清理**：回收站优先、永久删除二次确认、路径脱敏、保护清单
-- **完整子命令架构**：20+ 子命令覆盖全场景，模块化解耦
+- **多格式扫描**：默认 MP4/MOV/MKV/AVI/WebM/M4V/FLV，可用 `--ext` 自定义；支持 `.duplicateignore` / `.globalignore` 排除规则、排除目录和文件大小过滤
+- **双哈希融合比对**：pHash + dHash 加权融合（权重可在 config.ini 调整），可选 FFmpeg 音频哈希辅助（`--audio-check`）；元数据预筛加 `--double-check` 二次校验降低误报
+- **LSH 分桶加速**：视频数超过 50 时自动启用位掩码分桶，桶数用 `--lsh-buckets` 调整
+- **缓存与增量扫描**：哈希缓存（JSON 或 SQLite），支持增量模式、多缓存合并、无效/过期条目清理、gzip 压缩存储
+- **多维度保留策略**：每组默认保留文件最大者，可改为按最新修改时间、分辨率或码率保留
+- **多格式导出**：分组报告 TXT/MD/HTML/XLSX，明细 CSV，重复与损坏视频纯路径清单，哈希备份，恢复脚本
+- **安全清理**：清理计划默认只预览；确认后文件移入带操作 ID 的隔离区并记录 SHA-256，支持执行前校验、事后恢复、按天数清理过期隔离操作
+- **自动化集成**：`--summary-json` 导出稳定的 `scan_summary.json`；退出码区分「无重复 / 有重复 / 有解析失败 / 参数错误」
+- **筛选**：时长条件（如 `--duration-filter ">=60&<=360"`）、分辨率上下限、AI 低质量画面过滤、时长纯计数模式
+- **AI 语义分析（可选）**：CLIP 零样本场景/物体/行为识别、数据集用途判定、语义聚类、训练集清单导出、K-Means 素材自动分类（默认 dry-run 预览）
+- **可视化看板（可选）**：Streamlit 交互式看板，8 个面板（总览、重复分组、语义分析、时长/分辨率筛选、缓存管理、任务执行、报告导出、语义检索）
+- **扩展工具集（可选）**：批量多目录扫描、分组缩略图导出、重复素材备份、硬链接替换、素材整理、相似片段提取；元数据 Excel 导出、磁盘空间分析、素材标签、语义检索、快照归档、两次扫描对比；综合 HTML 报告、PDF 导出、质检报告、报告打包
 
-## 适用场景
-
-本项目适合需要整理、审核或长期维护视频素材库的个人和团队。它只读取视频并生成报告；删除、移动和硬链接操作默认通过预览脚本执行，建议先人工确认清理计划。
-
-### 个人与家庭素材
-
-- 手机、相机、无人机视频导入后的重复文件清理；
-- 微信、网盘、聊天软件多次下载造成的副本整理；
-- 旅行、婚礼、家庭录像按画面相似度筛选保留版本；
-- NAS 或移动硬盘扩容前分析可释放空间。
-
-推荐命令：
-
-```bash
-python find_mp4.py --dir D:\Videos --summary-json --format html
-```
-
-### 摄影、短视频与自媒体团队
-
-- 相机原片、代理文件、剪辑导出文件的重复检测；
-- MP4/MOV/MKV 混合素材库统一扫描；
-- 按分辨率、时长、码率辅助选择更高质量版本；
-- 发布前检查重复片头、重复成片和多次导出文件。
-
-推荐先预览，不要直接永久删除：
-
-```bash
-python find_mp4.py --dir D:\素材库 --workers 4 --gen-cleanup --summary-json
-```
-
-### 教育、培训与会议录像
-
-- 课程视频、直播录像、会议录屏去重；
-- 识别不同编码、分辨率或文件名下的同一内容；
-- 按时长过滤短片、片段和无效录屏；
-- 生成可交给管理系统读取的 JSON 摘要。
-
-```bash
-python find_mp4.py --dir D:\课程 --duration-filter ">=300" --summary-json
-```
-
-### 数据集与 AI 训练素材
-
-- 计算机视觉数据集的视频去重和清洗；
-- CLIP 场景识别、语义标签和自动分类；
-- 过滤低质量、模糊或暗光视频；
-- 导出训练集清单、标签和数据集统计。
-
-```bash
-python find_mp4.py --dir D:\dataset --semantic --export-dataset --skip-low-quality
-```
-
-### 监控、行车记录仪与工业视频
-
-- 多日期、多设备导出的视频批量去重；
-- 按分辨率、时长和目录进行筛选；
-- 对无法解码的文件生成独立故障清单；
-- 适合离线处理敏感视频，避免上传云端。
-
-### NAS、服务器与自动化任务
-
-- 定时扫描新增视频并复用缓存；
-- 用 `scan_summary.json` 接入看板、脚本或 CI；
-- 检查解析失败数量和可释放空间；
-- 多目录批量扫描和报告归档。
-
-不建议直接用于：需要逐帧取证级结论、法律证据判定、实时流媒体检测、未经授权的他人视频处理。pHash 是相似度筛选工具，不等同于内容鉴定；重要删除操作必须人工复核。
-
-## 项目结构
+## 项目组成
 
 ```
-distinguish/
-├── find_mp4.py            # 主程序 v2.6（核心查重+AI分析+子命令委托）
-├── ai_semantic.py         # AI 语义分析+自动分类模块
-├── dashboard.py           # Streamlit 可视化看板（v2.6 新增）
-├── report_generator.py    # 增强报告系统（v2.6 新增）
-├── batch_tools.py         # 批量处理工具集（v2.6 新增）
-├── media_analyze.py       # 媒体分析工具集（v2.6 新增）
-├── requirements.txt       # 基础依赖清单
-├── requirements_ai.txt    # AI 扩展依赖清单
-├── config.ini             # 配置文件模板
-├── install.bat            # Windows 一键安装脚本
-├── install_ai.bat         # AI 依赖一键安装脚本
-├── dataset_labels.ini     # 自定义标签配置文件
-├── test_demo.py           # 测试脚本
-├── .gitignore             # Git 忽略规则
-└── README.md              # 本文档
+video-duplicate-check/
+├── find_mp4.py          # 主程序：扫描/比对/分组/导出/安全清理 + 内置子命令
+├── ai_semantic.py       # AI 语义分析：CLIP 场景/用途判定、聚类、自动分类
+├── dashboard.py         # Streamlit 可视化看板（8 个面板）
+├── batch_tools.py       # 批量工具：多目录扫描/缩略图/备份/硬链接/整理/片段提取
+├── media_analyze.py     # 媒体分析：元数据 Excel/磁盘分析/标签/语义检索/快照/对比
+├── report_generator.py  # 报告系统：综合 HTML/PDF/质检/对比/归档
+├── config.ini           # 配置文件模板（[scan] / [weights] 段）
+├── dataset_labels.ini   # AI 场景、物体、行为、用途标签配置
+├── requirements.txt     # 全量依赖（含可选依赖）
+├── requirements_ai.txt  # AI 扩展依赖
+├── install.bat          # Windows 安装脚本（基础版 / AI 增强版二选一）
+├── install_ai.bat       # Windows AI 依赖安装脚本（含国内镜像配置）
+├── test_demo.py         # 独立自测脚本
+└── README.md
 ```
+
+`find_mp4.py` 内置子命令：`scan`（默认，可省略）、`clean-cache`、`merge-cache`、`verify-cache`、`version`、`validate-plan`、`execute-plan`、`restore-operation`、`list-operations`、`purge-operations`、`semantic-analyze`、`dataset-filter`、`cluster-scene`、`clear-semantic-cache`、`dataset-split`、`duration-stat`、`reload-labels`、`test`、`auto-classify`、`dashboard`。其中 v2.6 的扩展工具子命令（`batch-scan`、`media-info`、`full-report` 等）只是转发到独立模块，实际可用形式见下文「扩展工具」。
+
+## 环境要求
+
+- Python 3.9 及以上（代码使用了 3.9+ 的内置泛型类型标注）
+- FFmpeg（可选）：仅 `--audio-check` 音频比对需要
+- AI 功能（可选）：torch、open-clip-torch、scikit-learn；未安装时自动降级为纯哈希查重
 
 ## 安装
 
-### 1. 基础安装（纯哈希查重，无需 AI）
+最小安装（纯哈希查重，不含看板/报告/AI）：
+
+```bash
+pip install opencv-python numpy Pillow imagehash tqdm psutil
+```
+
+完整安装（`requirements.txt` 同时包含上述基础依赖和 streamlit、plotly、pandas、openpyxl、reportlab、torch 等可选依赖）：
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. AI 扩展安装（语义分析、自动分类）
+仅追加 AI 语义分析依赖：
 
 ```bash
 pip install -r requirements_ai.txt
 ```
 
-### 3. 可视化看板安装（v2.6 新增）
+Windows 下也可以运行 `install.bat`（交互选择基础版或 AI 增强版）或 `install_ai.bat`（配置国内镜像并安装全部依赖）。
 
-```bash
-pip install streamlit plotly pandas
-# 国内镜像
-pip install streamlit plotly pandas -i https://pypi.tuna.tsinghua.edu.cn/simple
-```
-
-### 4. PDF 导出安装（可选）
-
-```bash
-pip install reportlab
-```
-
-### 5. Excel 导出安装（可选）
-
-```bash
-pip install openpyxl
-```
+可选依赖的对应关系：Excel 导出需要 openpyxl；PDF 导出需要 reportlab（优先）或 weasyprint（备选）；看板需要 streamlit、plotly、pandas；语义分析需要 requirements_ai.txt 中的四件套。
 
 ## 快速开始
 
-### 1. 基础查重
-
 ```bash
-# 最基础用法（默认扫描 MP4/MOV/MKV/AVI/WebM/M4V/FLV）
+# 最基础用法：扫描 D:\Videos 并输出重复分组（默认 TXT 报告）
 python find_mp4.py --dir D:\Videos
 
-# 导出机器可读摘要，便于 CI/看板/自动化脚本读取
-python find_mp4.py --dir D:\Videos --summary-json
+# 导出 HTML 报告（含缩略图）
+python find_mp4.py --dir D:\Videos --format html
+
+# 快速粗筛（更少帧数、更高阈值）
+python find_mp4.py --dir D:\Videos --fast
+
+# 高精度模式：提高阈值、增加采样帧数、开启二次校验
+python find_mp4.py --dir D:\Videos --threshold 0.85 --frames 15 --double-check
+
+# 增量扫描：仅处理新增或修改过的视频
+python find_mp4.py --dir D:\Videos --incremental
 
 # 只扫描指定格式
 python find_mp4.py --dir D:\Videos --ext mp4,mov,mkv
 
-# 快速粗筛
-python find_mp4.py --dir D:\Videos --fast
-
-# 高精度查重
-python find_mp4.py --dir D:\Videos --threshold 0.85 --frames 15 --double-check
+# 导出机器可读摘要，供脚本/看板/CI 读取
+python find_mp4.py --dir D:\Videos --summary-json --output-dir D:\Reports
 ```
 
-### 2. 启动可视化看板（v2.6 推荐）
+一次扫描默认在输出目录生成：`similar_result.csv`（明细）、`duplicate_groups.txt`（或所选格式的分组报告）、`duplicate_paths.txt`（重复文件路径清单）、`bad_video_list.txt`（无法解析的视频）。
+
+**退出码**：`0` 无重复；`1` 存在重复分组；`2` 存在解析失败的视频；`3` 参数错误。可直接用于定时任务和 CI 判断。
+
+## 常用参数
+
+| 类别 | 参数 | 说明 |
+|------|------|------|
+| 范围 | `--ext`、`--no-recursive`、`--exclude-folder`、`--exclude-size-lt/gt` | 后缀、递归、排除目录、大小过滤 |
+| 比对 | `--threshold`（默认 0.7）、`--frames`（默认 10）、`--fast`、`--double-check`、`--lsh-buckets`、`--use-md5`、`--audio-check` | 相似度与校验策略 |
+| 保留 | `--keep-latest`、`--keep-max-res`、`--keep-max-bitrate` | 每组保留策略，默认保留文件最大者（`--keep-max-size` 为显式声明） |
+| 筛选 | `--duration-filter`、`--duration-stat`、`--duration-export`、`--min-res`、`--max-res`、`--skip-low-quality` | 时长/分辨率/质量过滤 |
+| 输出 | `--format`、`--output-dir`、`--output-prefix`、`--min-sim`、`--path-mask`、`--lite-csv`、`--export-clean-list`、`--export-bad-paths`、`--export-hash`、`--gen-restore`、`--summary-json`、`--gen-cleanup` | 报告与清单 |
+| 安全 | `--dry-run`、`--quiet`、`--protect-folder`、`--protect-file`、`--backup-path`、`--hard-delete` | 保护与删除控制 |
+| 缓存 | `--no-cache`、`--incremental`、`--clean-cache`、`--verify-cache`、`--merge-cache`、`--cache-expire-days`、`--compress-cache`、`--no-store-frames` | 缓存管理 |
+
+完整参数见 `python find_mp4.py --help`。
+
+## 安全清理流程
+
+扫描生成清理计划后，按「校验 → 预览 → 确认 → 可恢复」执行：
+
+```bash
+# 1. 扫描并生成清理计划（发现重复分组时输出 cleanup_plan.json）
+python find_mp4.py --dir D:\Videos --gen-cleanup --format html
+
+# 2. 校验计划中的文件是否仍存在且大小未变（扫描后文件可能已变动）
+python find_mp4.py validate-plan cleanup_plan.json
+
+# 3. 预览执行：默认不移动任何文件
+python find_mp4.py execute-plan cleanup_plan.json
+
+# 4. 确认执行：移入 <计划目录>\trash\<操作ID>\，并写入含 SHA-256 的 operation.json
+python find_mp4.py execute-plan cleanup_plan.json --confirm-cleanup
+
+# 5. 恢复：默认预览；加 --confirm-restore 后校验大小与 SHA-256（内容变化时跳过）
+python find_mp4.py restore-operation trash\<操作ID>\operation.json --confirm-restore
+
+# 6. 列出隔离区中的全部清理操作
+python find_mp4.py list-operations trash
+
+# 7. 清理过期隔离操作：默认仅预览超过 30 天的操作，确认后永久删除
+python find_mp4.py purge-operations trash --older-than 30
+python find_mp4.py purge-operations trash --older-than 30 --confirm-purge
+```
+
+`--protect-folder` / `--protect-file` 可声明保护目录和保护清单，`--backup-path` 在清理前把待删文件备份到指定目录。`--hard-delete` 走永久删除脚本路径，需要交互终端输入 YES 确认。
+
+## 扫描摘要 JSON（自动化集成）
+
+`--summary-json` 输出的 `scan_summary.json` 包含：`schema_version`、`status`（`clean` / `duplicates_found` / `completed_with_errors`）、`total_videos`、`hash_success`、`parse_failures`、`duplicate_groups`、`duplicate_videos`、`reclaimable_bytes`（可释放字节数）、`groups`（成员路径、最高相似度、重复等级）、`extensions`（格式分布）、`quality_buckets`（`exact_or_reencoded` / `highly_similar` / `possibly_similar` / `weak_match`）。
+
+外部程序只需读取该文件即可获得扫描结果，无需解析终端日志；建议先检查 `schema_version` 再读取字段。
+
+## 扩展工具
+
+三个扩展模块依赖主程序的缓存与核心逻辑，请在仓库根目录直接运行（通过 `python find_mp4.py <子命令>` 转发时，模块专属参数无法透传，见「已知边界」）。
+
+### batch_tools.py — 批量处理
+
+```bash
+# 多目录批量扫描：dirs.txt 一行一个目录（# 开头为注释行），
+# 合并各目录已发现的缓存，并输出 batch_scan_report.txt（名称+大小级重复提示）
+python batch_tools.py batch-scan --dir-list dirs.txt --output-dir batch_output
+
+# 按重复分组导出首帧缩略图集
+python batch_tools.py export-thumbnails --groups-json groups.json
+
+# 批量备份待清理的重复视频
+python batch_tools.py backup-duplicates --groups-json groups.json --backup-dir D:\backup
+
+# 批量把重复视频替换为硬链接（节省磁盘，替换前建议先备份）
+python batch_tools.py replace-hardlinks --groups-json groups.json
+
+# 按用途/时长/分辨率整理素材（默认 dry-run 预览）
+python batch_tools.py organize --dir D:\Videos --organize-by duration
+
+# 提取两段视频高度相似的时间区间，输出 Markdown 报告
+python batch_tools.py extract-segments --video1 v1.mp4 --video2 v2.mp4
+```
+
+`export-thumbnails` / `backup-duplicates` / `replace-hardlinks` 的 `--groups-json` 需要是主程序内部格式的分组 JSON（成员为「序号 + 文件信息」列表）；`scan_summary.json` 的分组结构与之不同，不能直接作为输入。文件操作类子命令均支持 `--dry-run` 预览。
+
+### media_analyze.py — 媒体分析
+
+```bash
+# 批量导出视频元数据到 Excel（需 openpyxl）
+python media_analyze.py media-info D:\Videos -o media_info.xlsx
+
+# 基于缓存生成磁盘空间优化报告（Markdown）
+python media_analyze.py space-analyze video_hash_cache.json
+
+# 素材标签管理：add / remove / list / export
+python media_analyze.py tag-manage add D:\v.mp4 --tag 精品素材
+python media_analyze.py tag-manage list
+python media_analyze.py tag-manage export --export-path tags.txt
+
+# 语义检索：按文字描述找视频（依赖缓存中的 CLIP 特征，先完成语义分析）
+python media_analyze.py similar-search "城市街道夜景" video_hash_cache.json --top-k 10
+
+# 导出快照存档（缓存 + 报告打包 zip）
+python media_analyze.py export-snapshot snapshot.zip
+
+# 两次扫描对比报告
+python media_analyze.py diff-scan old_cache.json new_cache.json
+```
+
+### report_generator.py — 报告系统
+
+基于扫描产生的哈希缓存文件工作（先运行一次扫描），而非直接扫描目录：
+
+```bash
+# 综合汇总 HTML 报告
+python report_generator.py full-report --cache video_hash_cache.json --project-name "项目A"
+
+# HTML 转 PDF（需 reportlab 或 weasyprint，可加水印）
+python report_generator.py export-pdf --html full_report.html --pdf 项目A.pdf --watermark "机密"
+
+# 磁盘空间优化报告 / AI 数据集质检报告（Markdown）
+python report_generator.py space-report --cache video_hash_cache.json
+python report_generator.py quality-report --cache video_hash_cache.json
+
+# 两份缓存的数据对比报告
+python report_generator.py diff-report --old old_cache.json --new new_cache.json
+
+# 把报告目录打包为 zip
+python report_generator.py archive --reports-dir D:\Reports
+```
+
+## 可视化看板
 
 ```bash
 # 方式一：直接启动
@@ -166,341 +231,56 @@ streamlit run dashboard.py
 
 # 方式二：通过主程序启动
 python find_mp4.py dashboard
-
-# 浏览器访问 http://localhost:8501
 ```
 
-看板包含 8 大面板：
-- **总览大盘**：视频总量、重复分组、可释放空间、分辨率/时长饼图
-- **重复分组详情**：表格+缩略图+相似度+批量勾选清理
-- **AI 语义分析**：场景分布、用途占比、高质量/低质素材统计
-- **时长&分辨率筛选**：直方图+交互式滑块筛选
-- **缓存管理**：缓存大小、条目数、一键清理、合并上传
-- **任务执行**：可视化配置参数，一键发起扫描/AI分析/分类
-- **报告导出**：在线预览+一键下载 HTML/Excel/MD/压缩包
-- **语义检索**：输入文字描述检索匹配视频
+启动后浏览器访问 <http://localhost:8501>。看板包含 8 个面板：
 
-### 3. AI 自动分类（v2.5）
+1. **总览大盘** — 视频总量、重复分组、可释放空间、分辨率/时长分布图
+2. **重复分组详情** — 表格 + 缩略图 + 相似度，支持导出清理清单
+3. **AI 语义分析** — 场景分布、用途占比、质量统计
+4. **时长 & 分辨率筛选** — 直方图 + 交互式滑块
+5. **缓存管理** — 缓存大小、条目数、清理
+6. **任务执行** — 表单配置参数，通过子进程发起扫描/语义分析/自动分类/时长统计
+7. **报告导出** — 在线预览并生成综合 HTML、空间/质检报告与打包归档
+8. **语义检索** — 按文字描述检索缓存中的视频
+
+## AI 语义分析与自动分类（可选）
 
 ```bash
-# 预览模式（默认，不修改文件）
+pip install -r requirements_ai.txt
+
+# 扫描时同时进行 CLIP 语义分析
+python find_mp4.py --dir D:\Videos --semantic
+
+# 仅执行语义分析 / 按用途筛选 / 语义聚类 / 数据集导出
+python find_mp4.py semantic-analyze --dir D:\Videos
+python find_mp4.py --dir D:\Videos --semantic --purpose-filter 监控训练集
+python find_mp4.py --dir D:\Videos --semantic --cluster-semantic
+python find_mp4.py --dir D:\Videos --semantic --export-dataset --skip-low-quality
+
+# AI 自动分类：默认 dry-run 预览，确认后 --execute 执行（--link-mode 用硬链接代替移动）
 python find_mp4.py auto-classify --dir D:\Videos
-
-# 执行硬链接分类
 python find_mp4.py auto-classify --dir D:\Videos --execute --link-mode
-
-# 分类 + 筛选联动
-python find_mp4.py auto-classify --dir D:\Videos --duration-filter ">=60" --min-res 1920
 ```
 
-## v2.6 新增功能详解
-
-### 可视化看板（dashboard.py）
-
-基于 Streamlit 的交互式看板，一键启动后浏览器访问。
-
-```bash
-# 启动看板
-streamlit run dashboard.py
-
-# 通过主程序启动
-python find_mp4.py dashboard
-```
-
-**功能面板**：
-1. 总览大盘 - 全局统计 + 分辨率/时长饼图 + 磁盘占用柱状图
-2. 重复分组详情 - 表格 + 缩略图 + 批量勾选清理
-3. AI 语义分析 - 场景分布 + 用途占比 + 质量统计
-4. 时长&分辨率筛选 - 直方图 + 交互式滑块
-5. 缓存管理 - 清理无效/过期缓存 + 多文件合并
-6. 任务执行 - 可视化参数配置 + 一键发起任务
-7. 报告导出 - 在线预览 + 一键下载
-8. 语义检索 - 文字描述检索视频
-
-### 增强报告系统（report_generator.py）
-
-```bash
-# 生成综合汇总 HTML 报告
-python find_mp4.py full-report --dir D:\Videos --project-name "项目A"
-
-# HTML 转 PDF（需 reportlab）
-python find_mp4.py export-pdf --html full_report.html --pdf 项目A.pdf --project-name "项目A"
-
-# 磁盘空间优化报告
-python find_mp4.py space-report --dir D:\Videos
-
-# AI 数据集质检报告
-python find_mp4.py quality-report --dir D:\Videos
-
-# 批量打包所有报告为 zip
-python find_mp4.py archive --dir D:\Videos
-```
-
-### 批量处理工具（batch_tools.py）
-
-```bash
-# 多目录批量扫描（txt 一行一个目录）
-python find_mp4.py batch-scan --batch-dir-list dirs.txt
-
-# 批量导出分组缩略图集
-python find_mp4.py export-thumbnails --dir D:\Videos
-
-# 批量备份重复素材
-python find_mp4.py backup-duplicates --dir D:\Videos --backup-dir D:\backup
-
-# 批量替换重复视频为硬链接（极致节省磁盘）
-python find_mp4.py replace-hardlinks --dir D:\Videos
-
-# 素材移动整理（按 AI 分类/时长/分辨率）
-python find_mp4.py organize --dir D:\Videos --organize-by ai_class
-
-# 重复画面片段提取（时间戳报告）
-python find_mp4.py extract-segments --video1 v1.mp4 --video2 v2.mp4
-```
-
-### 媒体分析工具（media_analyze.py）
-
-```bash
-# 批量导出视频完整元数据到 Excel
-python find_mp4.py media-info --dir D:\Videos
-
-# 磁盘占用分析报告
-python find_mp4.py space-analyze --dir D:\Videos
-
-# 素材标签管理
-python find_mp4.py tag-manage add --video D:\v.mp4 --tag 精品素材
-python find_mp4.py tag-manage remove --video D:\v.mp4 --tag 精品素材
-python find_mp4.py tag-manage list
-python find_mp4.py tag-manage export --output tags.txt
-
-# 语义相似度检索（输入文字找视频）
-python find_mp4.py similar-search "城市街道夜景" --dir D:\Videos --top-k 10
-
-# 导出快照存档（缓存+报告打包 zip）
-python find_mp4.py export-snapshot --output snapshot.zip
-
-# 两次扫描对比报告
-python find_mp4.py diff-scan --old-cache old.json --new-cache new.json
-```
-
-## 完整子命令列表
-
-| 命令 | 说明 | 版本 |
-|------|------|------|
-| `scan` | 扫描视频（默认命令，可省略） | v1.0 |
-| `clean-cache` | 清理无效缓存条目 | v1.0 |
-| `merge-cache` | 合并多个缓存文件 | v1.0 |
-| `verify-cache` | 校验缓存有效性 | v1.0 |
-| `version` | 打印版本信息 | v1.0 |
-| `semantic-analyze` | 仅执行 AI 内容语义分析 | v2.2 |
-| `dataset-filter` | 按数据集用途筛选视频 | v2.2 |
-| `cluster-scene` | 纯画面内容聚类分组 | v2.2 |
-| `clear-semantic-cache` | 清理 AI 语义缓存 | v2.3 |
-| `dataset-split` | 数据集分类拆分 | v2.3 |
-| `duration-stat` | 时长统计子命令 | v2.4 |
-| `reload-labels` | 热加载标签配置 | v2.4 |
-| `test` | 内置核心逻辑测试 | v2.4 |
-| `auto-classify` | AI 自动分类子命令 | v2.5 |
-| **`dashboard`** | **启动 Streamlit 可视化看板** | **v2.6** |
-| **`batch-scan`** | **多目录批量扫描** | **v2.6** |
-| **`export-thumbnails`** | **批量导出分组缩略图集** | **v2.6** |
-| **`backup-duplicates`** | **批量备份重复素材** | **v2.6** |
-| **`replace-hardlinks`** | **批量替换重复视频为硬链接** | **v2.6** |
-| **`organize`** | **素材移动整理** | **v2.6** |
-| **`extract-segments`** | **重复画面片段提取** | **v2.6** |
-| **`media-info`** | **批量导出视频元数据到 Excel** | **v2.6** |
-| **`space-analyze`** | **磁盘占用分析报告** | **v2.6** |
-| **`tag-manage`** | **素材标签管理** | **v2.6** |
-| **`similar-search`** | **语义相似度检索** | **v2.6** |
-| **`export-snapshot`** | **导出快照存档** | **v2.6** |
-| **`diff-scan`** | **两次扫描对比报告** | **v2.6** |
-| **`full-report`** | **生成综合汇总 HTML 报告** | **v2.6** |
-| **`export-pdf`** | **HTML 报告转 PDF** | **v2.6** |
-| **`diff-report`** | **数据对比报告** | **v2.6** |
-| **`quality-report`** | **AI 数据集质检报告** | **v2.6** |
-| **`archive`** | **批量打包所有报告为 zip** | **v2.6** |
-
-## v2.6 新增命令行参数
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `--report-name` | str | "" | 自定义所有报告前缀名称 |
-| `--export-pdf` | flag | False | 扫描完成自动生成 PDF 完整报告 |
-| `--batch-dir-list` | str | "" | 批量扫描文件夹 txt 路径文件 |
-| `--tag` | str | "" | 扫描时过滤带指定标签素材 |
-| `--similar-search` | str | "" | 语义检索指定画面视频 |
-| `--summary-json` | flag | False | 导出机器可读扫描摘要 JSON（含重复等级、质量分和可释放空间） |
-| `validate-plan` | command | - | 校验清理计划中文件是否仍存在且未变化，不执行删除 |
-| `execute-plan` | command | - | 默认预览清理计划；加 `--confirm-cleanup` 后移动到隔离目录 |
-| `restore-operation` | command | - | 从 `operation.json` 恢复隔离文件 |
-| `list-operations` | command | - | 列出隔离区的历史清理操作 |
-| `purge-operations` | command | - | 预览或永久清理过期隔离操作 |
-
-## 自动化集成与任务结果
-
-使用 `--summary-json` 可将一次扫描结果作为稳定的任务结果文件导出：
-
-```bash
-python find_mp4.py --dir D:\Videos --summary-json --output-dir D:\Reports
-```
-
-清理前可先校验计划，防止扫描后文件被替换或删除：
-
-```bash
-python find_mp4.py validate-plan D:\Reports\cleanup_plan.json
-
-# 默认只预览，不移动文件
-python find_mp4.py execute-plan D:\Reports\cleanup_plan.json
-
-# 确认后移动到 D:\Reports\trash\时间戳_随机ID\，不会永久删除；会生成唯一 operation_id
-python find_mp4.py execute-plan D:\Reports\cleanup_plan.json --confirm-cleanup
-
-# 根据隔离区 operation.json 恢复文件（默认预览）
-python find_mp4.py restore-operation D:\Reports\trash\时间戳\operation.json
-
-# 确认恢复（恢复前校验大小和 SHA-256，内容变化会跳过）
-python find_mp4.py restore-operation D:\Reports\trash\时间戳_随机ID\operation.json --confirm-restore
-
-# 列出隔离区中的全部操作
-python find_mp4.py list-operations D:\Reports\trash
-
-# 预览超过 30 天的隔离操作（默认不删除）
-python find_mp4.py purge-operations D:\Reports\trash --older-than 30
-
-# 确认永久删除过期隔离操作（不可恢复，请谨慎）
-python find_mp4.py purge-operations D:\Reports\trash --older-than 30 --confirm-purge
-```
-
-外部程序只需读取 `D:\Reports\scan_summary.json`，即可获得扫描数量、失败数量、重复等级、可释放空间、文件格式分布和清理候选，不需要解析终端中文日志。`schema_version` 用于未来兼容升级；建议自动化程序先检查它再读取字段。摘要还包含 `extensions`（格式数量）、`quality_buckets`（重复等级统计）和 `status`（`clean`、`duplicates_found` 或 `completed_with_errors`），方便 NAS 看板和定时任务直接展示或触发告警。
-
-## v2.6 新增输出文件
-
-| 文件 | 说明 |
-|------|------|
-| `full_report.html` | 综合汇总 HTML 报告（离线可打开） |
-| `full_report.pdf` | PDF 完整报告（需 reportlab） |
-| `space_optimization_report.md` | 磁盘空间优化报告 |
-| `quality_report.md` | AI 数据集质检报告 |
-| `diff_report.md` | 数据对比报告 |
-| `batch_scan_report.txt` | 批量扫描汇总报告 |
-| `media_info.xlsx` | 视频完整元数据 Excel |
-| `video_tags.json` | 素材标签存储文件 |
-| `auto_classify_report.json` | AI 自动分类报告 |
-| `snapshot_YYYYMMDD_HHMMSS.zip` | 快照存档 zip |
-| `reports_YYYYMMDD_HHMMSS.zip` | 报告打包 zip |
-
-## 场景示例
-
-### 场景一：可视化看板全流程管理（v2.6 推荐）
-
-```bash
-# 1. 启动看板
-streamlit run dashboard.py
-
-# 2. 在看板中配置参数，一键发起扫描
-# 3. 查看总览大盘，了解重复情况
-# 4. 在重复分组详情中勾选清理项
-# 5. 导出综合报告存档
-```
-
-### 场景二：批量扫描多个目录
-
-```bash
-# 1. 准备目录列表文件 dirs.txt
-# D:\Videos\camera1
-# D:\Videos\camera2
-# D:\Videos\backup
-
-# 2. 批量扫描
-python find_mp4.py batch-scan --batch-dir-list dirs.txt
-
-# 3. 查看汇总报告
-type batch_scan_report.txt
-```
-
-### 场景三：语义检索视频素材
-
-```bash
-# 检索城市街道夜景视频
-python find_mp4.py similar-search "城市街道夜景" --dir D:\Videos --top-k 10
-
-# 检索人物特写
-python find_mp4.py similar-search "人物面部特写" --dir D:\Videos
-
-# 检索室内会议
-python find_mp4.py similar-search "室内会议场景" --dir D:\Videos
-```
-
-### 场景四：生成完整项目报告
-
-```bash
-# 1. 生成综合 HTML 报告
-python find_mp4.py full-report --dir D:\Videos --project-name "2026年Q1素材审计"
-
-# 2. 转 PDF（带水印）
-python find_mp4.py export-pdf --input full_report.html --watermark "机密"
-
-# 3. 磁盘空间分析
-python find_mp4.py space-analyze --dir D:\Videos
-
-# 4. AI 质检报告
-python find_mp4.py quality-report --dir D:\Videos
-
-# 5. 打包所有报告
-python find_mp4.py archive --dir D:\Videos
-```
-
-### 场景五：素材整理与硬链接优化
-
-```bash
-# 1. AI 自动分类（预览）
-python find_mp4.py auto-classify --dir D:\Videos
-
-# 2. 执行硬链接分类
-python find_mp4.py auto-classify --dir D:\Videos --execute --link-mode
-
-# 3. 替换重复视频为硬链接（极致节省磁盘）
-python find_mp4.py replace-hardlinks --dir D:\Videos
-
-# 4. 按时长整理素材
-python find_mp4.py organize --dir D:\Videos --organize-by duration
-```
-
-### 场景六：素材标签管理
-
-```bash
-# 标记精品素材
-python find_mp4.py tag-manage add --video D:\v1.mp4 --tag 精品素材
-
-# 标记待删素材
-python find_mp4.py tag-manage add --video D:\v2.mp4 --tag 待删
-
-# 查看所有标签
-python find_mp4.py tag-manage list
-
-# 导出标签清单
-python find_mp4.py tag-manage export --output tags.txt
-
-# 扫描时过滤带标签素材
-python find_mp4.py --dir D:\Videos --tag 精品素材
-```
+- 场景、物体、行为和数据集用途标签在 `dataset_labels.ini` 中配置，改完重新运行 `--semantic` 即可生效（`reload-labels` 子命令可热加载）
+- `--clip-model-path` 可指定本地 CLIP 模型；`--embed-cache` 持久化特征向量供语义检索复用
+- 未安装 AI 依赖时上述功能会给出提示并跳过，纯哈希查重不受影响
 
 ## 配置文件
 
-`config.ini` 支持全部参数预配置，命令行参数优先级更高。
+`config.ini` 放在 `find_mp4.py` 同目录，或用 `--config` 指定路径；命令行参数优先于配置文件。实际生效的是 `[scan]` 段（扫描参数）和 `[weights]` 段（相似度权重）：
 
 ```ini
 [scan]
 dir = D:\Videos
 threshold = 0.7
 frames = 10
-semantic = true
-
-[dashboard]
-theme = light
-port = 8501
-watermark = 
-default_format = html
+format = html
+incremental = false
+duration_filter = >=60
+min_res = 0
+semantic = false
 
 [weights]
 phash_weight = 0.7
@@ -508,37 +288,34 @@ dhash_weight = 0.3
 audio_weight = 0.8
 ```
 
-## 常见问题
+`[scan]` 支持的键与同名命令行参数一致（如 `duration_filter` 对应 `--duration-filter`）。仓库内的 `config.ini` 是带注释的完整模板。
 
-### Q: 启动看板报错 No module named 'streamlit'
-
-```bash
-pip install streamlit plotly pandas
-```
-
-### Q: PDF 导出报错 No module named 'reportlab'
+## 测试与自检
 
 ```bash
-pip install reportlab
+# 独立自测脚本：构造测试视频跑通扫描、导出、筛选等主要流程
+python test_demo.py
+
+# 主程序内置核心逻辑测试（LSH 分桶、时长筛选、相似度计算等）
+python find_mp4.py test
 ```
 
-### Q: AI 自动分类报错 No module named 'torch'
+项目没有接入 pytest 等测试框架，以上两个脚本即为全部自动化测试。
 
-```bash
-pip install -r requirements_ai.txt
-```
+## 已知边界
 
-### Q: Excel 导出报错 No module named 'openpyxl'
-
-```bash
-pip install openpyxl
-```
+- `find_mp4.py` 也能接受 `batch-scan`、`media-info`、`full-report` 等扩展子命令并转发到对应模块，但 `--dir-list`、`--groups-json`、`--project-name` 这类模块专属参数不在主程序参数表中，转发时会在参数解析阶段报错（`dashboard` 除外，已单独处理）。扩展工具请直接运行对应模块脚本。
+- `--tag`、`--similar-search`、`--batch-dir-list`、`--export-pdf`、`--report-name` 参数会被主程序接受（也能写入配置映射），但当前版本的扫描流程没有使用它们，传入不会产生效果。
+- config.ini 的 `[dashboard]` 段目前没有代码读取；看板端口等以 Streamlit 默认行为为准。
+- pHash/dHash 是画面相似度筛选手段，不是内容鉴定：相似不等于同一内容。执行清理前请务必人工复核清理计划，重要素材先备份。
+- `similar-search` 依赖缓存中的 CLIP 特征（`semantic_emb`），需要先对相应目录完成语义分析。
+- 本仓库未包含开源许可证文件，使用前请与作者确认授权方式。
 
 ## 版本历史
 
-- **v2.6** - 可视化看板、增强报告系统、批量处理工具、媒体分析工具
-- **v2.5** - AI 自动分类、AppContext 全局状态管理
-- **v2.4** - 时长筛选统计、分辨率过滤、Excel导出、HTML缩略图、硬链接拆分
-- **v2.3** - 自定义CLIP模型、轻量CSV、备份路径、保护清单、压缩缓存
-- **v2.2** - AI 语义分析、场景聚类、数据集自动标注
-- **v1.0** - 基础哈希查重、LSH加速、缓存管理、多格式导出
+- **v2.6** — 可视化看板、增强报告系统、批量处理工具、媒体分析工具、子命令委托架构
+- **v2.5** — AI 自动分类（K-Means）、AppContext 全局状态管理、分类与筛选联动
+- **v2.4** — 时长筛选统计、分辨率过滤、Excel 导出、HTML 缩略图、路径脱敏、自定义权重配置
+- **v2.3** — 自定义 CLIP 模型路径、轻量 CSV、备份路径、保护清单、压缩缓存
+- **v2.2** — AI 语义分析、场景聚类、数据集自动标注与训练集清单导出
+- **v1.0** — 基础哈希查重、LSH 加速、缓存管理、多格式导出
