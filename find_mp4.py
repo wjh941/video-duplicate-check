@@ -53,20 +53,13 @@ v2.6 新增：可视化看板（dashboard.py）、增强报告系统（report_ge
   quality-report             AI 数据集质检报告（委托 report_generator.py）
   archive                    批量打包所有报告为 zip（委托 report_generator.py）
 
-【v2.6 新增命令行参数】
-  --report-name <名称>       自定义所有报告前缀名称
-  --export-pdf               扫描完成自动生成 PDF 完整报告（需 reportlab）
-  --batch-dir-list <txt>     批量扫描文件夹 txt 路径文件（一行一个目录）
-  --tag <标签>               扫描时过滤带指定标签素材
-  --similar-search "文本"    语义检索指定画面视频
-
 【v2.6 新增子命令使用示例】
 # 启动可视化看板
 streamlit run dashboard.py
 python find_mp4.py dashboard
 
 # 批量扫描多目录
-python find_mp4.py batch-scan --batch-dir-list dirs.txt --dir D:\\fallback
+python batch_tools.py batch-scan --dir-list dirs.txt
 
 # 语义检索视频
 python find_mp4.py similar-search "城市街道夜景" --dir D:\\Videos
@@ -584,17 +577,6 @@ def _build_shared_parser():
                         help="仅执行 AI 自动分类，不查重")
     parser.add_argument("--classify-method", type=str, default="kmeans",
                         help="分类算法 (kmeans)")
-    # 【v2.6 新增】拓展工具配套参数
-    parser.add_argument("--report-name", type=str, default="",
-                        help="自定义所有报告前缀名称（v2.6 新增）")
-    parser.add_argument("--export-pdf", action="store_true", default=False,
-                        help="扫描完成自动生成 PDF 完整报告（v2.6 新增，需 reportlab）")
-    parser.add_argument("--batch-dir-list", type=str, default="",
-                        help="批量扫描文件夹 txt 路径文件（v2.6 新增，一行一个目录）")
-    parser.add_argument("--tag", type=str, default="",
-                        help="扫描时过滤带指定标签素材（v2.6 新增）")
-    parser.add_argument("--similar-search", type=str, default="",
-                        help='语义检索指定画面视频，传入描述文本（v2.6 新增）')
     return parser
 
 
@@ -719,12 +701,6 @@ def load_config_file(config_path: str, args):
         "classify_method": "classify-method",
         "n_clusters": "n-clusters",
         "execute": "execute",
-        # 【v2.6 新增】拓展工具参数映射
-        "report_name": "report-name",
-        "export_pdf": "export-pdf",
-        "batch_dir_list": "batch-dir-list",
-        "tag": "tag",
-        "similar_search": "similar-search",
     }
     bool_fields = {
         "double-check", "audio-check", "fast", "incremental", "keep-latest",
@@ -732,7 +708,6 @@ def load_config_file(config_path: str, args):
         "export-dataset", "quiet", "dry-run", "duration-export", "no-store-frames",
         "export-clean-list", "path-mask", "skip-low-quality", "link-mode",
         "compress-cache", "hard-delete", "gen-restore", "classify-only", "execute",
-        "export-pdf",
     }
     def parse_bool(value: str) -> bool:
         normalized = str(value).strip().lower()

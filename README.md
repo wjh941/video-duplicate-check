@@ -305,8 +305,6 @@ python find_mp4.py test
 ## 已知边界
 
 - `find_mp4.py` 也能接受 `batch-scan`、`media-info`、`full-report` 等扩展子命令并转发到对应模块，但 `--dir-list`、`--groups-json`、`--project-name` 这类模块专属参数不在主程序参数表中，转发时会在参数解析阶段报错（`dashboard` 除外，已单独处理）。扩展工具请直接运行对应模块脚本。
-- `--tag`、`--similar-search`、`--batch-dir-list`、`--export-pdf`、`--report-name` 参数会被主程序接受（也能写入配置映射），但当前版本的扫描流程没有使用它们，传入不会产生效果。
-- config.ini 的 `[dashboard]` 段目前没有代码读取；看板端口等以 Streamlit 默认行为为准。
 - pHash/dHash 是画面相似度筛选手段，不是内容鉴定：相似不等于同一内容。执行清理前请务必人工复核清理计划，重要素材先备份。
 - `similar-search` 依赖缓存中的 CLIP 特征（`semantic_emb`），需要先对相应目录完成语义分析。
 - 本仓库未包含开源许可证文件，使用前请与作者确认授权方式。
