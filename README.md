@@ -14,8 +14,11 @@
 - **自动化集成**：`--summary-json` 导出稳定的 `scan_summary.json`；退出码区分「无重复 / 有重复 / 有解析失败 / 参数错误」
 - **筛选**：时长条件（如 `--duration-filter ">=60&<=360"`）、分辨率上下限、AI 低质量画面过滤、时长纯计数模式
 - **AI 语义分析（可选）**：CLIP 零样本场景/物体/行为识别、数据集用途判定、语义聚类、训练集清单导出、K-Means 素材自动分类（默认 dry-run 预览）
-- **可视化看板（可选）**：Streamlit 交互式看板，9 个面板（总览、重复分组、语义分析、时长/分辨率筛选、缓存管理、任务执行、报告导出、语义检索、标注验证）
+- **可视化看板（可选）**：Streamlit 交互式看板，10 个面板（总览、重复分组、语义分析、时长/分辨率筛选、缓存管理、任务执行、报告导出、语义检索、标注验证、嫌疑复核）
 - **扩展工具集（可选）**：批量多目录扫描、分组缩略图导出、重复素材备份、硬链接替换、素材整理、相似片段提取；元数据 Excel 导出、磁盘空间分析、素材标签、语义检索、快照归档、两次扫描对比；综合 HTML 报告、PDF 导出、质检报告、报告打包
+- **数据集一键体检（pipeline.py）**：`find_mp4.py pipeline --dir D:\cam_data --preset surveillance` 一条命令完成 查重 → 标注验证 → 汇总，产出 A/B/C 评级《数据集体检报告》与建议行动清单
+- **嫌疑复核工作台（看板面板）**：加载 label_verify 的嫌疑清单，并排播放嫌疑视频与建议标签对照视频，逐项判定（标注正确/改为建议标签/人工指定/跳过），一键导出修正标签 CSV（可直接用于 `--label-from csv`）与复核摘要
+- **场景预设**：`--preset surveillance`（固定机位监控：高阈值 + 分组约束 + 运动前景哈希自动启用）/ `--preset footage`（个人素材库）；显式指定的参数优先于预设
 - **预标注一致性验证（label_verify.py）**：自动识别文件夹名 / 文件名前缀 / CSV / 正则四种预标注来源，抽帧对比同标签视频的组内相似度（帧哈希 + 运动能量 + 运动前景哈希 + 可选 CLIP），与组间相似度对比后给出"标签是否名副其实"的一致性判定、疑似错标清单（含建议标签）和抽帧对比图（可点击播放原视频）；支持数据用途问卷（训练集/检测/素材库/归档）与针对性参考建议，`--verify-neg` 可用 CLIP 验证 neg 样本确实不含目标行为
 
 ## 项目组成
@@ -25,7 +28,9 @@ video-duplicate-check/
 ├── find_mp4.py          # 主程序：扫描/比对/分组/导出/安全清理 + 内置子命令
 ├── ai_semantic.py       # AI 语义分析：CLIP 场景/用途判定、聚类、自动分类
 ├── label_verify.py      # 预标注一致性验证：识别预标注 → 抽帧对比 → 错标检测
-├── dashboard.py         # Streamlit 可视化看板（9 个面板）
+├── dashboard.py         # Streamlit 可视化看板（10 个面板）
+├── pipeline.py          # 数据集一键体检：查重 + 标注验证 + A/B/C 体检报告
+├── review_tools.py      # 嫌疑复核逻辑模块（供看板复核工作台调用）
 ├── batch_tools.py       # 批量工具：多目录扫描/缩略图/备份/硬链接/整理/片段提取
 ├── media_analyze.py     # 媒体分析：元数据 Excel/磁盘分析/标签/语义检索/快照/对比
 ├── report_generator.py  # 报告系统：综合 HTML/PDF/质检/对比/归档
@@ -106,7 +111,8 @@ python find_mp4.py --dir D:\Videos --summary-json --output-dir D:\Reports
 |------|------|------|
 | 范围 | `--ext`、`--no-recursive`、`--exclude-folder`、`--exclude-size-lt/gt` | 后缀、递归、排除目录、大小过滤 |
 | 比对 | `--threshold`（默认 0.7）、`--frames`（默认 10）、`--fast`、`--double-check`、`--lsh-buckets`、`--use-md5` |
-| 分组/标注 | `--group-min-sim`（组内最低相似度约束，complete-linkage 拆分，0=关闭）、`--label-regex`（分组混合标注告警） |、`--audio-check` | 相似度与校验策略 |
+| 分组/标注 | `--group-min-sim`（组内最低相似度约束，complete-linkage 拆分，0=关闭）、`--label-regex`（分组混合标注告警） |
+| 预设 | `--preset surveillance`（固定机位监控）/ `--preset footage`（素材库）；`pipeline` 子命令一键体检 |、`--audio-check` | 相似度与校验策略 |
 | 保留 | `--keep-latest`、`--keep-max-res`、`--keep-max-bitrate` | 每组保留策略，默认保留文件最大者（`--keep-max-size` 为显式声明） |
 | 筛选 | `--duration-filter`、`--duration-stat`、`--duration-export`、`--min-res`、`--max-res`、`--skip-low-quality` | 时长/分辨率/质量过滤 |
 | 输出 | `--format`、`--output-dir`、`--output-prefix`、`--min-sim`、`--path-mask`、`--lite-csv`、`--export-clean-list`、`--export-bad-paths`、`--export-hash`、`--gen-restore`、`--summary-json`、`--gen-cleanup` | 报告与清单 |
@@ -294,6 +300,12 @@ python label_verify.py --dir D:\cam_data --motion-hash
 python label_verify.py --dir D:\cam_data --purpose train --use-clip --verify-neg
 
 # 数据用途不指定且在交互终端运行时会现场询问（train/detection/retrieval/archive/general）
+
+# 固定机位场景预设：自动开启 --motion-hash 并收紧嫌疑阈值至 0.55
+python label_verify.py --dir D:\cam_data --preset surveillance
+
+# 机器可读摘要（供 pipeline 使用）：额外导出 label_verify_summary.json
+python label_verify.py --dir D:\cam_data --summary-json
 ```
 
 特征 = 帧哈希 pHash+dHash（权重 0.6，与主程序同算法）+ 运动能量（帧间差分，权重 0.4）+ CLIP（可选）；
@@ -359,6 +371,7 @@ python find_mp4.py test
 
 ## 版本历史
 
+- **v2.8.0** — 数据集一键体检 `find_mp4.py pipeline`（查重+标注验证+A/B/C 体检报告与建议行动）；看板新增『嫌疑复核』工作台（并排播放对照、逐项判定、导出修正标签 CSV 与复核摘要，review_tools.py）；场景预设 `--preset surveillance/footage`（find_mp4/label_verify/pipeline 三处生效）；label_verify 新增 `--summary-json` 机器可读摘要
 - **v2.7.0** — label_verify：运动前景哈希与静止机位检测（`--motion-hash`）、neg 样本 CLIP 行为验证（`--verify-neg`）、数据用途问卷与参考建议（`--purpose`）、每组建议与总结、HTML 点击播放原视频与折叠分页、CLIP hf-mirror 自动回退；find_mp4：分组最低相似度约束（`--group-min-sim`，complete-linkage 拆分遏制传递性误差）、`--label-regex` 混合标注分组告警、`label-verify` 子命令、summary JSON 增加分组标签字段；dashboard 新增标注验证面板（9 面板）；子命令模式参数转发修复
 - **v2.6.1** — 新增预标注一致性验证工具 label_verify.py（预标注识别/抽帧对比/错标检测）；修复 --summary-json 导出时 similarities 元组键导致的序列化崩溃；短视频抽帧顺序解码快速路径
 - **v2.6** — 可视化看板、增强报告系统、批量处理工具、媒体分析工具、子命令委托架构

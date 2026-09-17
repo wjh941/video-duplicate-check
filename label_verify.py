@@ -54,6 +54,7 @@ v0.2 新增：
 import argparse
 import base64
 import csv
+import json
 import os
 import sys
 import time
@@ -763,9 +764,12 @@ def _purpose_guidance(purpose: str, result: dict, args) -> list:
     n_videos = sum(st["count"] for st in stats.values())
     multi = [l for l, st in stats.items() if st["count"] >= 2]
     counts = [stats[l]["count"] for l in multi] or [0]
+    # v2.8 兼容：suspects 可为列表（本工具内部）或数量（pipeline 传入）
+    _sus = result["suspects"]
+    n_suspects = len(_sus) if isinstance(_sus, (list, tuple)) else int(_sus or 0)
     if purpose == "train":
         tips.append("训练集建议：先复核 %d 个疑似标注不一致项（见 CSV），再划分数据集；"
-                    "neg 样本建议加跑 --use-clip --verify-neg 验证其确实不含目标行为。" % len(result["suspects"]))
+                    "neg 样本建议加跑 --use-clip --verify-neg 验证其确实不含目标行为。" % n_suspects)
         if counts and max(counts) >= 3 * max(1, min(counts)):
             tips.append("类别不平衡提醒：最大类 %d 个 vs 最小类 %d 个，训练时建议加权采样或过拟合小类。"
                         % (max(counts), min(counts)))
@@ -779,7 +783,7 @@ def _purpose_guidance(purpose: str, result: dict, args) -> list:
     elif purpose == "archive":
         tips.append("归档建议：按 时段/行为 两级目录整理；生成文件清单 + SHA-256；重复内容只保留一份。")
     else:
-        tips.append("通用建议：先处理疑似标注不一致项，再决定是否按查重结果去重。")
+        tips.append("通用建议：先处理疑似标注不一致项（%d 个），再决定是否按查重结果去重。" % n_suspects)
     if result.get("static_ratio", 0) >= 0.5:
         tips.append("固定机位提醒：%.0f%% 的视频被判为低运动前景（静止机位场景），"
                     "整段画面哈希主要反映背景而非内容；查重请开启 --motion-hash 或改用前景/行为特征。"
@@ -794,6 +798,24 @@ def _purpose_guidance(purpose: str, result: dict, args) -> list:
             tips.append("检测到 %d 个含 neg 的标签但未启用 --verify-neg：建议开启以验证 neg 样本确实不含目标行为。" % neg_cnt)
     tips.append("共 %d 个视频、%d 个标签（可验证标签 %d 个）。" % (n_videos, len(labels), len(multi)))
     return tips
+
+
+def _apply_preset(args):
+    """【v0.2 新增】场景预设：surveillance=固定机位监控（自动开运动前景哈希+收紧阈值）"""
+    name = getattr(args, "preset", "general") or "general"
+    if name != "surveillance":
+        return args
+    argv = sys.argv[1:]
+
+    def _not_set(flag):
+        return not any(a == flag or a.startswith(flag + "=") for a in argv)
+
+    if _not_set("--motion-hash") and not getattr(args, "no_motion_hash", False):
+        args.motion_hash = True
+    if _not_set("--suspect-threshold"):
+        args.suspect_threshold = 0.55
+    log("[预设] surveillance（固定机位监控）: 运动前景哈希开启 ｜ 嫌疑阈值 0.55")
+    return args
 
 
 def _resolve_purpose(args) -> str:
@@ -1073,6 +1095,13 @@ def parse_args():
                     help="预标注来源（默认 auto；regex=用 --label-regex 从文件名提取）")
     ap.add_argument("--label-regex", default="",
                     help=r"标签提取正则，第1个捕获组为标签，如 r'cam01_(.+?)-(?:pos|neg)'")
+    ap.add_argument("--preset", default="general",
+                    choices=["general", "surveillance", "footage"],
+                    help="场景预设：surveillance 自动启用运动前景哈希并收紧嫌疑阈值（显式指定的参数优先）")
+    ap.add_argument("--no-motion-hash", action="store_true",
+                    help="禁用运动前景哈希（surveillance 预设下用于覆盖默认开启）")
+    ap.add_argument("--summary-json", action="store_true",
+                    help="额外导出机器可读摘要 label_verify_summary.json（供 pipeline 使用）")
     ap.add_argument("--purpose", default="auto",
                     choices=["auto", "general", "train", "detection", "retrieval", "archive"],
                     help="数据用途（决定报告中的参考建议；auto=交互终端时询问）")
@@ -1099,6 +1128,9 @@ def parse_args():
 
 def main():
     args = parse_args()
+    args = _apply_preset(args)
+    if getattr(args, "no_motion_hash", False):
+        args.motion_hash = False
     t0 = time.time()
     root = os.path.abspath(os.path.expanduser(args.dir))
     if not os.path.isdir(root):
@@ -1219,6 +1251,27 @@ def main():
     html_path = os.path.join(out_dir, REPORT_HTML)
     write_report_md(md_path, result, label_map, sigs, args)
     write_suspects_csv(csv_path, result)
+    if getattr(args, "summary_json", False):
+        summary = {
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "dir": root, "purpose": args.purpose,
+            "videos": len(sigs), "suspects": len(result["suspects"]),
+            "global_intra": result["global_intra"],
+            "global_inter": result["global_inter"],
+            "separation": result["separation"],
+            "silhouette": result["silhouette"],
+            "static_ratio": result["static_ratio"],
+            "labels": [{"label": lbl,
+                        "count": result["label_stats"][lbl]["count"],
+                        "intra": result["label_stats"][lbl]["intra_mean"],
+                        "motion": result["label_stats"][lbl]["motion_mean"],
+                        "verdict": verdict_of(result["label_stats"][lbl], result)}
+                       for lbl in result["labels"]],
+        }
+        sj_path = os.path.join(out_dir, "label_verify_summary.json")
+        with open(sj_path, "w", encoding="utf-8") as f:
+            json.dump(summary, f, ensure_ascii=False, indent=2, default=str)
+        log("  机器可读摘要: %s" % sj_path)
     try:
         write_report_html(html_path, result, label_map, sigs, args)
     except Exception as exc:

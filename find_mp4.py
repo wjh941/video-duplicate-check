@@ -264,7 +264,7 @@ FFMPEG_AVAILABLE = bool(shutil.which("ffmpeg"))
 # ============================================================
 # 模块 0：全局配置常量 + 退出码
 # ============================================================
-__version__ = "2.7.0"
+__version__ = "2.8.0"
 
 # 缓存版本号（算法变更时自动作废旧缓存）
 CACHE_VERSION = "2.6"
@@ -584,6 +584,11 @@ def _build_shared_parser():
     parser.add_argument("--label-regex", type=str, default="",
                         help="标注提取正则（第1捕获组为标签），用于分组混合标注告警，"
                              "如 \"cam01_(.+?)-(?:pos|neg)\"")
+    # 【v2.8 新增】场景预设
+    parser.add_argument("--preset", type=str, default="general",
+                        choices=["general", "surveillance", "footage"],
+                        help="场景预设：surveillance=固定机位监控(threshold=0.85+group-min-sim=0.8+frames=6)，"
+                             "footage=个人素材库(threshold=0.7)；显式指定的参数优先于预设")
     return parser
 
 
@@ -603,7 +608,7 @@ def parse_args():
                    "full-report", "export-pdf", "diff-report", "quality-report",
                    "archive", "export-thumbnails", "backup-duplicates",
                    "replace-hardlinks", "organize", "extract-segments",
-                   "label-verify"}
+                   "label-verify", "pipeline"}
 
     # 提取第一个非flag参数来判断模式
     first_arg = None
@@ -4995,16 +5000,41 @@ def _run_interactive_wizard() -> list:
     return cmd_args
 
 
+def _apply_preset(args):
+    """【v2.8 新增】场景预设：显式指定的命令行参数优先于预设值。"""
+    name = getattr(args, "preset", "general") or "general"
+    if name == "general":
+        return args
+    argv = sys.argv[1:]
+
+    def _not_set(flag):
+        return not any(a == flag or a.startswith(flag + "=") for a in argv)
+
+    if name == "surveillance":
+        if _not_set("--threshold"):
+            args.threshold = 0.85
+        if _not_set("--group-min-sim"):
+            args.group_min_sim = 0.8
+        if _not_set("--frames"):
+            args.frames = 6
+        log("[预设] surveillance（固定机位监控）: threshold=0.85 ｜ group-min-sim=0.8 ｜ frames=6", force=True)
+    elif name == "footage":
+        if _not_set("--threshold"):
+            args.threshold = 0.7
+        log("[预设] footage（个人素材库）: threshold=0.7", force=True)
+    return args
+
+
 def main():
     global _global_cache, _global_exit_code, _quiet_mode
 
-    args = parse_args()
+    args = _apply_preset(parse_args())
 
     # 【v2.6 新增】交互式配置向导
     if getattr(args, "interactive", False):
         import sys as _sys
         _sys.argv = _run_interactive_wizard()
-        args = parse_args()
+        args = _apply_preset(parse_args())
 
     # 先加载配置，再统一校验；否则配置注入的字符串/非法范围会绕过校验。
     if args.config:
@@ -5150,6 +5180,8 @@ def main():
         "archive": ("report_generator", "archive"),
         # label_verify.py - 预标注一致性验证（v2.7 新增）
         "label-verify": ("label_verify", None),
+        # pipeline.py - 数据集一键体检（v2.8 新增）
+        "pipeline": ("pipeline", None),
     }
     if cmd in _V26_DELEGATE:
         module_name, sub_cmd = _V26_DELEGATE[cmd]

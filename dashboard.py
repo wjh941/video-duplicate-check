@@ -55,6 +55,10 @@ if _MISSING:
 # ============================================================
 # 模块 1：第三方库导入
 # ============================================================
+import csv
+
+import review_tools
+
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
@@ -1196,6 +1200,134 @@ def render_label_verify() -> None:
     else:
         st.error("运行失败（退出码 %d），请检查目录与参数" % code)
 
+def render_review_workbench() -> None:
+    """【v2.8 新增】嫌疑项复核工作台：并排播放 + 逐项判定 + 导出修正标签"""
+    st.header("🔍 嫌疑项复核工作台")
+    st.caption("逐个复核 label_verify 发现的疑似错标：左边嫌疑视频、右边建议标签的对照视频，"
+               "用按钮判定（标注正确 / 改为建议标签 / 人工指定 / 跳过），结果可导出为修正标签 CSV 与复核摘要。")
+    c1, c2 = st.columns([3, 2])
+    suspects_csv = c1.text_input("嫌疑清单 CSV（label_verify_suspects.csv）", value="", key="rv_csv")
+    video_dir = c2.text_input("视频根目录（用于找对照视频）", value="", key="rv_dir")
+    c3, c4 = st.columns(2)
+    label_regex = c3.text_input('标签正则（与验证时一致，用于找对照视频）',
+                                 value=r'cam01_(.+?)-(?:pos|neg)', key="rv_regex")
+    out_dir = c4.text_input("复核结果输出目录", value=os.path.join("_run_review"), key="rv_out")
+    if not (suspects_csv and os.path.exists(suspects_csv)):
+        st.info("请先填写嫌疑清单 CSV 路径（跑完 标注验证面板 后在输出目录里）。")
+        return
+    suspects = review_tools.load_suspects_csv(suspects_csv)
+    if not suspects:
+        st.warning("嫌疑清单为空：没有需要复核的项目 🎉")
+        return
+    if "rv_verdicts" not in st.session_state:
+        st.session_state.rv_verdicts = {}
+    if "rv_idx" not in st.session_state:
+        st.session_state.rv_idx = 0
+
+    done = sum(1 for s in suspects if s["path"] in st.session_state.rv_verdicts)
+    st.progress(done / len(suspects), text="已复核 %d / %d" % (done, len(suspects)))
+
+    # 未复核的优先展示
+    pending = [i for i, s in enumerate(suspects) if s["path"] not in st.session_state.rv_verdicts]
+    idx_options = pending + [i for i in range(len(suspects)) if i not in pending]
+    if st.session_state.rv_idx not in idx_options:
+        st.session_state.rv_idx = idx_options[0] if idx_options else 0
+    nav1, nav2, nav3 = st.columns([1, 2, 1])
+    if nav1.button("⬅ 上一个", key="rv_prev"):
+        pos = idx_options.index(st.session_state.rv_idx)
+        st.session_state.rv_idx = idx_options[max(0, pos - 1)]
+    if nav3.button("下一个 ➡", key="rv_next"):
+        pos = idx_options.index(st.session_state.rv_idx)
+        st.session_state.rv_idx = idx_options[min(len(idx_options) - 1, pos + 1)]
+    st.session_state.rv_idx = nav2.selectbox("嫌疑项", idx_options,
+                                             index=idx_options.index(st.session_state.rv_idx),
+                                             format_func=lambda i: "%d/%d  %s" % (i + 1, len(suspects),
+                                             os.path.basename(suspects[i]["path"])),
+                                             key="rv_sel")
+    s = suspects[st.session_state.rv_idx]
+    v = st.session_state.rv_verdicts.get(s["path"], {})
+
+    st.markdown("**当前标签：** %s ｜ **建议标签：** %s ｜ **组内相似度：** %s"
+                % (s["label"] or "（空）", s["suggested"] or "（无）", s["score"] or "—"))
+    if s["reason"]:
+        st.caption("原因：" + s["reason"])
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.subheader("🚨 嫌疑视频")
+        if os.path.exists(s["path"]):
+            st.video(s["path"])
+        else:
+            st.error("文件不存在：" + s["path"])
+    with col_b:
+        st.subheader("🎯 建议标签对照")
+        if s["suggested"] and video_dir and os.path.isdir(video_dir):
+            rep = review_tools.find_representative(video_dir, s["suggested"], label_regex,
+                                                   exclude=s["path"])
+            if rep:
+                st.caption("对照视频：" + os.path.basename(rep))
+                st.video(rep)
+            else:
+                st.info("目录里没找到标签为『%s』的其他视频" % s["suggested"])
+        else:
+            st.info("填写视频根目录后，这里会自动播放建议标签的对照视频")
+
+    # 判定区
+    b1, b2, b3, b4 = st.columns(4)
+    def _set(verdict, manual=""):
+        st.session_state.rv_verdicts[s["path"]] = {
+            "orig": s["label"], "verdict": verdict,
+            "suggested": s["suggested"], "manual": manual}
+    if b1.button("✅ 标注正确", key="rv_ok", use_container_width=True):
+        _set("ok")
+        st.rerun()
+    if b2.button("❌ 改为建议标签", key="rv_wrong", use_container_width=True,
+                 disabled=not s["suggested"]):
+        _set("wrong")
+        st.rerun()
+    manual_label = b3.text_input("人工指定新标签", value=s["suggested"] or "", key="rv_manual_txt")
+    if b3.button("✍️ 保存人工判定", key="rv_manual", use_container_width=True):
+        _set("manual", manual_label.strip())
+        st.rerun()
+    if b4.button("⏭ 跳过", key="rv_skip", use_container_width=True):
+        _set("skip")
+        st.rerun()
+    if v:
+        st.success("已判定：%s" % review_tools.VERDICT_TEXT.get(v.get("verdict"), "?"))
+
+    # 导出区
+    st.divider()
+    n_done = len(st.session_state.rv_verdicts)
+    e1, e2, e3 = st.columns(3)
+    csv_path = os.path.join(out_dir, "review_results.csv")
+    md_path = os.path.join(out_dir, "review_summary.md")
+    fixed_path = os.path.join(out_dir, "labels_corrected.csv")
+    if e1.button("💾 保存复核结果到磁盘", use_container_width=True):
+        n = review_tools.export_review_results(st.session_state.rv_verdicts, csv_path)
+        review_tools.export_review_report(st.session_state.rv_verdicts, md_path, len(suspects))
+        rows = [("filename", "label")]
+        for p, vv in sorted(st.session_state.rv_verdicts.items()):
+            vd = vv.get("verdict")
+            final = (vv.get("suggested") if vd == "wrong" else
+                     vv.get("manual") if vd == "manual" else
+                     vv.get("orig") if vd == "ok" else "")
+            if final and vd != "skip":
+                rows.append((os.path.basename(p), final))
+        with open(fixed_path, "w", encoding="utf-8-sig", newline="") as f:
+            csv.writer(f).writerows(rows)
+        st.success("已保存：%s（%d 条）｜ %s ｜ %s（可直接用于 --label-from csv 修正标签）"
+                   % (csv_path, n, os.path.basename(md_path), os.path.basename(fixed_path)))
+    if e2.button("⬇️ 下载复核结果 CSV", use_container_width=True) and n_done:
+        import io
+        import tempfile
+        tmp = os.path.join(tempfile.gettempdir(), "review_results.csv")
+        review_tools.export_review_results(st.session_state.rv_verdicts, tmp)
+        st.download_button("确认下载", data=open(tmp, "rb").read(),
+                           file_name="review_results.csv", mime="text/csv", key="rv_dl")
+    if e3.button("🧹 清空本次复核记录", use_container_width=True):
+        st.session_state.rv_verdicts = {}
+        st.rerun()
+
 def render_semantic_search(cache_path: str) -> None:
     """面板 8：语义检索面板。"""
     st.header("🔎 语义检索面板")
@@ -1307,6 +1439,7 @@ def main() -> None:
                 "📄 报告导出面板",
                 "🔎 语义检索面板",
                 "🏷️ 标注验证面板",
+                "🔍 嫌疑复核",
             ],
             key="nav_radio",
         )
@@ -1325,6 +1458,8 @@ def main() -> None:
             render_task_execution(cache_path)
         if page == "🏷️ 标注验证面板":
             render_label_verify()
+        if page == "🔍 嫌疑复核":
+            render_review_workbench()
         render_operation_log()
         return
 
@@ -1347,6 +1482,8 @@ def main() -> None:
         render_semantic_search(cache_path)
     elif page == "🏷️ 标注验证面板":
         render_label_verify()
+    elif page == "🔍 嫌疑复核":
+        render_review_workbench()
 
     # ---------- 操作日志区（始终显示在底部） ----------
     st.divider()
