@@ -3747,10 +3747,14 @@ def export_summary_json(path: str, mp4_files: list[dict], video_hashes: dict,
             })
         similarities = group.get("similarities", {})
         max_similarity = max(similarities.values()) if similarities else 1.0
+        # v2.6.1 修复：similarities 的键是 (idx_a, idx_b) 元组，直接 json.dumps
+        # 会抛 "keys must be str, int, float, bool or None, not tuple"（真实数据集上必现）
+        similarities_json = {f"{k[0]}|{k[1]}" if isinstance(k, tuple) else str(k): v
+                             for k, v in similarities.items()}
         group_rows.append({"group": number, "members": members,
                            "max_similarity": max_similarity,
                            "level": _similarity_level(max_similarity),
-                           "similarities": similarities})
+                           "similarities": similarities_json})
     summary = {
         "schema_version": 1,
         "status": _summary_exit_status(groups, bad_videos),

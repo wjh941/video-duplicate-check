@@ -109,6 +109,9 @@ split_catalog.txt
 # 临时文件
 *.tmp
 
+# 本地试验 / 临时输出（下划线开头的本地文件一律忽略）
+_*
+
 # Python 缓存
 .mypy_cache/
 .pytest_cache/

@@ -16,6 +16,7 @@
 - **AI 语义分析（可选）**：CLIP 零样本场景/物体/行为识别、数据集用途判定、语义聚类、训练集清单导出、K-Means 素材自动分类（默认 dry-run 预览）
 - **可视化看板（可选）**：Streamlit 交互式看板，8 个面板（总览、重复分组、语义分析、时长/分辨率筛选、缓存管理、任务执行、报告导出、语义检索）
 - **扩展工具集（可选）**：批量多目录扫描、分组缩略图导出、重复素材备份、硬链接替换、素材整理、相似片段提取；元数据 Excel 导出、磁盘空间分析、素材标签、语义检索、快照归档、两次扫描对比；综合 HTML 报告、PDF 导出、质检报告、报告打包
+- **预标注一致性验证（label_verify.py）**：自动识别文件夹名 / 文件名前缀 / CSV / 正则四种预标注来源，抽帧对比同标签视频的组内相似度（帧哈希 + 运动能量 + 可选 CLIP），与组间相似度对比后给出"标签是否名副其实"的一致性判定、疑似错标清单（含建议标签）和抽帧对比图
 
 ## 项目组成
 
@@ -23,6 +24,7 @@
 video-duplicate-check/
 ├── find_mp4.py          # 主程序：扫描/比对/分组/导出/安全清理 + 内置子命令
 ├── ai_semantic.py       # AI 语义分析：CLIP 场景/用途判定、聚类、自动分类
+├── label_verify.py      # 预标注一致性验证：识别预标注 → 抽帧对比 → 错标检测
 ├── dashboard.py         # Streamlit 可视化看板（8 个面板）
 ├── batch_tools.py       # 批量工具：多目录扫描/缩略图/备份/硬链接/整理/片段提取
 ├── media_analyze.py     # 媒体分析：元数据 Excel/磁盘分析/标签/语义检索/快照/对比
@@ -264,6 +266,42 @@ python find_mp4.py auto-classify --dir D:\Videos --execute --link-mode
 ```
 
 - 场景、物体、行为和数据集用途标签在 `dataset_labels.ini` 中配置，改完重新运行 `--semantic` 即可生效（`reload-labels` 子命令可热加载）
+
+## 预标注一致性验证（label_verify.py）
+
+当视频已经带有人工预标注（文件夹名、文件名前缀、CSV、或嵌入文件名的结构化字段）时，
+本工具回答："**带相同标签的视频，是否真的表现出相同的行为/画面？**"适用于数据集清洗与标注质检。
+
+```bash
+# 自动识别预标注（优先文件夹名，其次文件名前缀）
+python label_verify.py --dir D:\labeled_videos
+
+# 文件名内嵌标注：用正则提取（第 1 个捕获组为标签）
+# 例如 20260909-cam01_closeup-dog_come-pos-daytime-276.mp4 → 标签 closeup-dog_come
+python label_verify.py --dir D:\cam_data --label-regex "cam01_(.+?)-(?:pos|neg|night)"
+
+# CSV 标注文件（列名支持 filename/path + label/标签）
+python label_verify.py --dir D:\data --label-from csv --labels-csv labels.csv
+
+# 启用 CLIP 语义特征（需 torch/open-clip-torch，首次运行需下载权重）
+python label_verify.py --dir D:\data --use-clip
+```
+
+特征 = 帧哈希 pHash+dHash（权重 0.6，与主程序同算法）+ 运动能量（帧间差分，权重 0.4）+ CLIP（可选）。
+判定规则：组内相似度低于阈值 / 显著偏离标签均值 / 与其他标签更相似（跨标签吸引力，同时给出建议标签）。
+
+输出（默认在 `--dir` 下 `_label_verify\` 目录）：
+
+| 文件 | 内容 |
+|------|------|
+| `label_verify_report.md` | 组内/组间相似度、分离度、轮廓系数、各标签判定、混淆矩阵、疑似清单 |
+| `label_verify_suspects.csv` | 疑似标注不一致清单（当前标签、建议标签、原因） |
+| `label_verify_frames.html` | 抽帧对比图（按标签分组缩略图，疑似项标红） |
+
+退出码：0=全部一致；1=发现疑似不一致；2=有解析失败；3=参数/数据错误。
+
+> 注意：帧哈希衡量画面外观、运动能量近似行为强度。同标签但场景完全不同的视频（如不同街道的"行走"）
+> 哈希相似度天然偏低，属预期现象，此时应以运动能量与 CLIP 特征为主判断；结论仅供清洗参考，不能替代人工复核。
 - `--clip-model-path` 可指定本地 CLIP 模型；`--embed-cache` 持久化特征向量供语义检索复用
 - 未安装 AI 依赖时上述功能会给出提示并跳过，纯哈希查重不受影响
 
@@ -311,6 +349,7 @@ python find_mp4.py test
 
 ## 版本历史
 
+- **v2.6.1** — 新增预标注一致性验证工具 label_verify.py（预标注识别/抽帧对比/错标检测）；修复 --summary-json 导出时 similarities 元组键导致的序列化崩溃；短视频抽帧顺序解码快速路径
 - **v2.6** — 可视化看板、增强报告系统、批量处理工具、媒体分析工具、子命令委托架构
 - **v2.5** — AI 自动分类（K-Means）、AppContext 全局状态管理、分类与筛选联动
 - **v2.4** — 时长筛选统计、分辨率过滤、Excel 导出、HTML 缩略图、路径脱敏、自定义权重配置
