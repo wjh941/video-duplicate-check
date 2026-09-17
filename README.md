@@ -14,9 +14,9 @@
 - **自动化集成**：`--summary-json` 导出稳定的 `scan_summary.json`；退出码区分「无重复 / 有重复 / 有解析失败 / 参数错误」
 - **筛选**：时长条件（如 `--duration-filter ">=60&<=360"`）、分辨率上下限、AI 低质量画面过滤、时长纯计数模式
 - **AI 语义分析（可选）**：CLIP 零样本场景/物体/行为识别、数据集用途判定、语义聚类、训练集清单导出、K-Means 素材自动分类（默认 dry-run 预览）
-- **可视化看板（可选）**：Streamlit 交互式看板，8 个面板（总览、重复分组、语义分析、时长/分辨率筛选、缓存管理、任务执行、报告导出、语义检索）
+- **可视化看板（可选）**：Streamlit 交互式看板，9 个面板（总览、重复分组、语义分析、时长/分辨率筛选、缓存管理、任务执行、报告导出、语义检索、标注验证）
 - **扩展工具集（可选）**：批量多目录扫描、分组缩略图导出、重复素材备份、硬链接替换、素材整理、相似片段提取；元数据 Excel 导出、磁盘空间分析、素材标签、语义检索、快照归档、两次扫描对比；综合 HTML 报告、PDF 导出、质检报告、报告打包
-- **预标注一致性验证（label_verify.py）**：自动识别文件夹名 / 文件名前缀 / CSV / 正则四种预标注来源，抽帧对比同标签视频的组内相似度（帧哈希 + 运动能量 + 可选 CLIP），与组间相似度对比后给出"标签是否名副其实"的一致性判定、疑似错标清单（含建议标签）和抽帧对比图
+- **预标注一致性验证（label_verify.py）**：自动识别文件夹名 / 文件名前缀 / CSV / 正则四种预标注来源，抽帧对比同标签视频的组内相似度（帧哈希 + 运动能量 + 运动前景哈希 + 可选 CLIP），与组间相似度对比后给出"标签是否名副其实"的一致性判定、疑似错标清单（含建议标签）和抽帧对比图（可点击播放原视频）；支持数据用途问卷（训练集/检测/素材库/归档）与针对性参考建议，`--verify-neg` 可用 CLIP 验证 neg 样本确实不含目标行为
 
 ## 项目组成
 
@@ -25,7 +25,7 @@ video-duplicate-check/
 ├── find_mp4.py          # 主程序：扫描/比对/分组/导出/安全清理 + 内置子命令
 ├── ai_semantic.py       # AI 语义分析：CLIP 场景/用途判定、聚类、自动分类
 ├── label_verify.py      # 预标注一致性验证：识别预标注 → 抽帧对比 → 错标检测
-├── dashboard.py         # Streamlit 可视化看板（8 个面板）
+├── dashboard.py         # Streamlit 可视化看板（9 个面板）
 ├── batch_tools.py       # 批量工具：多目录扫描/缩略图/备份/硬链接/整理/片段提取
 ├── media_analyze.py     # 媒体分析：元数据 Excel/磁盘分析/标签/语义检索/快照/对比
 ├── report_generator.py  # 报告系统：综合 HTML/PDF/质检/对比/归档
@@ -105,7 +105,8 @@ python find_mp4.py --dir D:\Videos --summary-json --output-dir D:\Reports
 | 类别 | 参数 | 说明 |
 |------|------|------|
 | 范围 | `--ext`、`--no-recursive`、`--exclude-folder`、`--exclude-size-lt/gt` | 后缀、递归、排除目录、大小过滤 |
-| 比对 | `--threshold`（默认 0.7）、`--frames`（默认 10）、`--fast`、`--double-check`、`--lsh-buckets`、`--use-md5`、`--audio-check` | 相似度与校验策略 |
+| 比对 | `--threshold`（默认 0.7）、`--frames`（默认 10）、`--fast`、`--double-check`、`--lsh-buckets`、`--use-md5` |
+| 分组/标注 | `--group-min-sim`（组内最低相似度约束，complete-linkage 拆分，0=关闭）、`--label-regex`（分组混合标注告警） |、`--audio-check` | 相似度与校验策略 |
 | 保留 | `--keep-latest`、`--keep-max-res`、`--keep-max-bitrate` | 每组保留策略，默认保留文件最大者（`--keep-max-size` 为显式声明） |
 | 筛选 | `--duration-filter`、`--duration-stat`、`--duration-export`、`--min-res`、`--max-res`、`--skip-low-quality` | 时长/分辨率/质量过滤 |
 | 输出 | `--format`、`--output-dir`、`--output-prefix`、`--min-sim`、`--path-mask`、`--lite-csv`、`--export-clean-list`、`--export-bad-paths`、`--export-hash`、`--gen-restore`、`--summary-json`、`--gen-cleanup` | 报告与清单 |
@@ -283,20 +284,29 @@ python label_verify.py --dir D:\cam_data --label-regex "cam01_(.+?)-(?:pos|neg|n
 # CSV 标注文件（列名支持 filename/path + label/标签）
 python label_verify.py --dir D:\data --label-from csv --labels-csv labels.csv
 
-# 启用 CLIP 语义特征（需 torch/open-clip-torch，首次运行需下载权重）
+# 启用 CLIP 语义特征（需 torch/open-clip-torch，首次运行需下载权重，失败自动换 hf-mirror）
 python label_verify.py --dir D:\data --use-clip
+
+# 固定机位监控数据：运动前景哈希（多帧中值估计背景，仅前景差异区域参与比对）
+python label_verify.py --dir D:\cam_data --motion-hash
+
+# 训练集清洗：指定数据用途获得针对性建议 + CLIP 验证 neg 样本确实不含目标行为
+python label_verify.py --dir D:\cam_data --purpose train --use-clip --verify-neg
+
+# 数据用途不指定且在交互终端运行时会现场询问（train/detection/retrieval/archive/general）
 ```
 
-特征 = 帧哈希 pHash+dHash（权重 0.6，与主程序同算法）+ 运动能量（帧间差分，权重 0.4）+ CLIP（可选）。
-判定规则：组内相似度低于阈值 / 显著偏离标签均值 / 与其他标签更相似（跨标签吸引力，同时给出建议标签）。
+特征 = 帧哈希 pHash+dHash（权重 0.6，与主程序同算法）+ 运动能量（帧间差分，权重 0.4）+ CLIP（可选）；
+`--motion-hash` 额外引入前景差分哈希（背景用多帧中值估计），固定机位场景下显著提升区分度，并统计"静止机位占比"。
+判定规则：组内相似度低于阈值 / 显著偏离标签均值 / 与其他标签更相似（跨标签吸引力，同时给出建议标签）/ neg 样本被 CLIP 判断疑似包含目标行为（`--verify-neg`）。
 
 输出（默认在 `--dir` 下 `_label_verify\` 目录）：
 
 | 文件 | 内容 |
 |------|------|
-| `label_verify_report.md` | 组内/组间相似度、分离度、轮廓系数、各标签判定、混淆矩阵、疑似清单 |
+| `label_verify_report.md` | 组内/组间相似度、分离度、轮廓系数、各标签判定与建议总结、混淆矩阵、数据用途参考建议、疑似清单 |
 | `label_verify_suspects.csv` | 疑似标注不一致清单（当前标签、建议标签、原因） |
-| `label_verify_frames.html` | 抽帧对比图（按标签分组缩略图，疑似项标红） |
+| `label_verify_frames.html` | 抽帧对比图（按标签折叠分组 + 锚点导航，疑似项标红，每组附自动建议，点击『▶ 播放』内嵌播放原视频） |
 
 退出码：0=全部一致；1=发现疑似不一致；2=有解析失败；3=参数/数据错误。
 
@@ -342,13 +352,14 @@ python find_mp4.py test
 
 ## 已知边界
 
-- `find_mp4.py` 也能接受 `batch-scan`、`media-info`、`full-report` 等扩展子命令并转发到对应模块，但 `--dir-list`、`--groups-json`、`--project-name` 这类模块专属参数不在主程序参数表中，转发时会在参数解析阶段报错（`dashboard` 除外，已单独处理）。扩展工具请直接运行对应模块脚本。
+- 扩展子命令（`batch-scan`、`media-info`、`label-verify` 等）的模块专属参数自 v2.7 起可直接转发（主程序参数解析改为宽松模式，未知参数由被委托模块自行解析），模块返回的整数退出码也会透传。
 - pHash/dHash 是画面相似度筛选手段，不是内容鉴定：相似不等于同一内容。执行清理前请务必人工复核清理计划，重要素材先备份。
 - `similar-search` 依赖缓存中的 CLIP 特征（`semantic_emb`），需要先对相应目录完成语义分析。
 - 本仓库未包含开源许可证文件，使用前请与作者确认授权方式。
 
 ## 版本历史
 
+- **v2.7.0** — label_verify：运动前景哈希与静止机位检测（`--motion-hash`）、neg 样本 CLIP 行为验证（`--verify-neg`）、数据用途问卷与参考建议（`--purpose`）、每组建议与总结、HTML 点击播放原视频与折叠分页、CLIP hf-mirror 自动回退；find_mp4：分组最低相似度约束（`--group-min-sim`，complete-linkage 拆分遏制传递性误差）、`--label-regex` 混合标注分组告警、`label-verify` 子命令、summary JSON 增加分组标签字段；dashboard 新增标注验证面板（9 面板）；子命令模式参数转发修复
 - **v2.6.1** — 新增预标注一致性验证工具 label_verify.py（预标注识别/抽帧对比/错标检测）；修复 --summary-json 导出时 similarities 元组键导致的序列化崩溃；短视频抽帧顺序解码快速路径
 - **v2.6** — 可视化看板、增强报告系统、批量处理工具、媒体分析工具、子命令委托架构
 - **v2.5** — AI 自动分类（K-Means）、AppContext 全局状态管理、分类与筛选联动

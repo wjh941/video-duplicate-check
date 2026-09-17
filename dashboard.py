@@ -1145,6 +1145,57 @@ def render_report_export(cache_path: str) -> None:
             st.caption(f"读取 {rf} 失败：{e}")
 
 
+def render_label_verify() -> None:
+    """【v2.7 新增】预标注一致性验证面板：调起 label_verify.py 并展示结果"""
+    st.header("🏷️ 预标注一致性验证")
+    st.caption("识别文件夹名/文件名前缀/CSV/正则预标注，抽帧对比同标签视频是否真的表现相同行为。"
+               "输出 MD 报告 + 疑似清单 CSV + 可点击播放原视频的抽帧对比 HTML。")
+    with st.form("lv_form"):
+        c1, c2 = st.columns([3, 1])
+        data_dir = c1.text_input("视频目录", value="", key="lv_dir")
+        recursive = c2.checkbox("递归子目录", value=True, key="lv_rec")
+        c3, c4 = st.columns(2)
+        mode = c3.selectbox("标签来源", ["auto", "folder", "prefix", "regex", "csv"], key="lv_mode")
+        regex = c4.text_input('标签正则（label-from=regex 时，第1捕获组为标签）',
+                              value=r'cam01_(.+?)-(?:pos|neg)', key="lv_regex")
+        c5, c6, c7 = st.columns(3)
+        purpose = c5.selectbox("数据用途", ["general", "train", "detection", "retrieval", "archive"],
+                               index=0, key="lv_purpose")
+        use_clip = c6.checkbox("启用 CLIP 语义", value=False, key="lv_clip")
+        motion_hash = c7.checkbox("运动前景哈希（固定机位推荐）", value=False, key="lv_mh")
+        out_dir = st.text_input("报告输出目录（留空=视频目录下 _label_verify）", value="", key="lv_out")
+        submitted = st.form_submit_button("🚀 运行一致性验证")
+    if not submitted:
+        return
+    if not data_dir:
+        st.error("请填写视频目录")
+        return
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "label_verify.py")
+    py_exe = sys.executable or "python"
+    cmd = [py_exe, script, "--dir", data_dir, "--label-from", mode, "--purpose", purpose]
+    if mode == "regex" and regex:
+        cmd += ["--label-regex", regex]
+    if not recursive:
+        cmd.append("--no-recursive")
+    if out_dir:
+        cmd += ["--output-dir", out_dir]
+    if use_clip:
+        cmd.append("--use-clip")
+    if motion_hash:
+        cmd.append("--motion-hash")
+    st.info("运行中，完整输出见下方日志…（大数据集建议用命令行跑，避免看板超时）")
+    code = _stream_subprocess(cmd)
+    base = out_dir or os.path.join(data_dir, "_label_verify")
+    if code == 0:
+        st.success("全部标签一致。报告: " + os.path.join(base, "label_verify_report.md"))
+    elif code == 1:
+        st.warning("发现疑似标注不一致，详见 " + os.path.join(base, "label_verify_suspects.csv")
+                   + " ；抽帧对比: " + os.path.join(base, "label_verify_frames.html"))
+    elif code == 2:
+        st.error("部分视频解析失败，报告已生成: " + base)
+    else:
+        st.error("运行失败（退出码 %d），请检查目录与参数" % code)
+
 def render_semantic_search(cache_path: str) -> None:
     """面板 8：语义检索面板。"""
     st.header("🔎 语义检索面板")
@@ -1255,6 +1306,7 @@ def main() -> None:
                 "⚙️ 任务执行面板",
                 "📄 报告导出面板",
                 "🔎 语义检索面板",
+                "🏷️ 标注验证面板",
             ],
             key="nav_radio",
         )
@@ -1271,6 +1323,8 @@ def main() -> None:
         # 仍渲染任务执行面板以便用户启动扫描
         if page == "⚙️ 任务执行面板":
             render_task_execution(cache_path)
+        if page == "🏷️ 标注验证面板":
+            render_label_verify()
         render_operation_log()
         return
 
@@ -1291,6 +1345,8 @@ def main() -> None:
         render_report_export(cache_path)
     elif page == "🔎 语义检索面板":
         render_semantic_search(cache_path)
+    elif page == "🏷️ 标注验证面板":
+        render_label_verify()
 
     # ---------- 操作日志区（始终显示在底部） ----------
     st.divider()

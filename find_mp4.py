@@ -264,7 +264,7 @@ FFMPEG_AVAILABLE = bool(shutil.which("ffmpeg"))
 # ============================================================
 # 模块 0：全局配置常量 + 退出码
 # ============================================================
-__version__ = "2.6.0"
+__version__ = "2.7.0"
 
 # 缓存版本号（算法变更时自动作废旧缓存）
 CACHE_VERSION = "2.6"
@@ -577,6 +577,13 @@ def _build_shared_parser():
                         help="仅执行 AI 自动分类，不查重")
     parser.add_argument("--classify-method", type=str, default="kmeans",
                         help="分类算法 (kmeans)")
+    # 【v2.7 新增】分组质量与标注联动
+    parser.add_argument("--group-min-sim", type=float, default=0.0,
+                        help="组内最低相似度约束 (0=关闭)。按 complete-linkage 策略拆分"
+                             "连通图分组中点对相似度不达标的组，遏制传递性误差")
+    parser.add_argument("--label-regex", type=str, default="",
+                        help="标注提取正则（第1捕获组为标签），用于分组混合标注告警，"
+                             "如 \"cam01_(.+?)-(?:pos|neg)\"")
     return parser
 
 
@@ -595,7 +602,8 @@ def parse_args():
                    "tag-manage", "similar-search", "export-snapshot", "diff-scan",
                    "full-report", "export-pdf", "diff-report", "quality-report",
                    "archive", "export-thumbnails", "backup-duplicates",
-                   "replace-hardlinks", "organize", "extract-segments"}
+                   "replace-hardlinks", "organize", "extract-segments",
+                   "label-verify"}
 
     # 提取第一个非flag参数来判断模式
     first_arg = None
@@ -653,7 +661,9 @@ def parse_args():
         parser.add_argument("--confirm-purge", action="store_true", default=False,
                             help="确认永久删除过期隔离区（默认仅预览）")
 
-    args = parser.parse_args()
+    # 【v2.7 修改】parse_known_args：允许委托子命令携带模块专属参数
+    #（如 label-verify --suspect-threshold），这些参数由被委托模块自行解析
+    args, _unknown_extra = parser.parse_known_args()
     args.command = first_arg
     return args
 
@@ -2737,15 +2747,77 @@ def pre_filter_by_metadata(mp4_files: list[dict]) -> tuple:
 # ============================================================
 # 模块 7：连通图分组（多维度保留策略）
 # ============================================================
+def _split_group_min_sim(
+    members: list,
+    sim_lookup: dict,
+    floor: float,
+) -> list:
+    """
+    【v2.7 新增】complete-linkage 式分组约束：
+    1) 先剔除低于 floor 的"弱桥"边，对组内重新求连通分量（切断传递链）；
+    2) 再逐个剔除组内平均相似度最低的成员，直到组内所有点对相似度 >= floor；
+    3) 被剔除后落单的成员不再成组（视为非重复）。
+    返回拆分后的成员列表（每个元素是一组成员索引列表）。
+    """
+    parent = {m: m for m in members}
+
+    def _find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for (i, j), sim in sim_lookup.items():
+        if i in parent and j in parent and sim >= floor:
+            ri, rj = _find(i), _find(j)
+            if ri != rj:
+                parent[ri] = rj
+
+    comps_map = {}
+    for m in members:
+        comps_map.setdefault(_find(m), []).append(m)
+
+    final = []
+    for comp in comps_map.values():
+        comp = list(comp)
+        ejected = []
+        guard = 0
+        while len(comp) >= 2 and guard < 4 * len(members) + 16:
+            guard += 1
+            pair_sims = []
+            for ai, a in enumerate(comp):
+                for b in comp[ai + 1:]:
+                    pair_sims.append((sim_lookup.get((min(a, b), max(a, b)), 0.0), a, b))
+            min_sim = min(s for s, _a, _b in pair_sims)
+            if min_sim >= floor:
+                break
+            avg = {}
+            for m in comp:
+                vals = [s for s, a, b in pair_sims if a == m or b == m]
+                avg[m] = (sum(vals) / len(vals)) if vals else 0.0
+            weakest = min(comp, key=lambda m: avg[m])
+            comp.remove(weakest)
+            ejected.append(weakest)
+        if len(comp) >= 2:
+            final.append(comp)
+        else:
+            ejected.extend(comp)
+    return final
+
+
 def build_groups(
     similar_pairs: list[dict],
     mp4_files: list[dict],
     video_hashes: dict,
     keep_strategy: str = "max-size",
+    min_group_sim: float = 0.0,
 ) -> list[dict]:
     """
     连通图分组，支持多维度保留策略。
     keep_strategy: max-size / latest / max-res / max-bitrate
+    min_group_sim: 【v2.7 新增】组内最低相似度约束（0=关闭）。>0 时对每个连通分量
+        调用 _split_group_min_sim，保证组内任意点对相似度不低于该值，
+        遏制 A≈B≈C 却 A≉C 的传递性误差（固定机位场景滚雪球分组的主要来源）。
     """
     parent = {}
 
@@ -2778,8 +2850,22 @@ def build_groups(
         key = (min(pair["idx_a"], pair["idx_b"]), max(pair["idx_a"], pair["idx_b"]))
         sim_lookup[key] = pair["similarity"]
 
+    # 【v2.7 新增】组内最低相似度约束
+    if min_group_sim and min_group_sim > 0.0:
+        member_lists = []
+        for members in group_map.values():
+            if len(members) >= 2:
+                member_lists.extend(_split_group_min_sim(members, sim_lookup, min_group_sim))
+        member_lists = [m for m in member_lists if len(m) >= 2]
+        dropped = sum(len(v) for v in group_map.values()) - sum(len(m) for m in member_lists)
+        if dropped > 0:
+            log(f"  [分组约束] --group-min-sim={min_group_sim}: 拆分后 {len(member_lists)} 组，"
+                f"{dropped} 个成员不再成组（组内相似度不达标）")
+    else:
+        member_lists = list(group_map.values())
+
     groups = []
-    for root, members in group_map.items():
+    for members in member_lists:
         member_files = [(idx, mp4_files[idx]) for idx in members]
 
         # 选择保留视频
@@ -3176,6 +3262,11 @@ def export_groups_html(groups: list[dict], mp4_files: list[dict], html_path: str
 
         for gi, group in enumerate(filtered, 1):
             html_parts.append(f"<div class='group'><h2>第 {gi} 组</h2>\n")
+        # 【v2.7 新增】混合标注告警徽标
+        if group.get("mixed_labels"):
+            html_parts.append(
+                f"<p style='color:#c00;font-size:13px'>⚠ 混合标注分组：包含多个不同标注"
+                f"（{', '.join(group.get('labels', []))}），疑似固定机位场景误聚，清理前请人工复核。</p>\n")
             for fi, (idx, info) in enumerate(group["members"]):
                 mark = "retain" if idx == group["retain_idx"] else "clean"
                 text = "保留" if idx == group["retain_idx"] else "清理"
@@ -3754,6 +3845,8 @@ def export_summary_json(path: str, mp4_files: list[dict], video_hashes: dict,
         group_rows.append({"group": number, "members": members,
                            "max_similarity": max_similarity,
                            "level": _similarity_level(max_similarity),
+                           "labels": group.get("labels", []),
+                           "mixed_labels": bool(group.get("mixed_labels", False)),
                            "similarities": similarities_json})
     summary = {
         "schema_version": 1,
@@ -4703,9 +4796,12 @@ def _delegate_to_module(module_name: str, sub_cmd: Optional[str], args) -> None:
         old_argv = sys.argv
         sys.argv = new_argv
         try:
-            mod.main()
+            _mod_rc = mod.main()
         finally:
             sys.argv = old_argv
+        # 【v2.7 新增】透传模块 main() 返回的整数退出码（如 label_verify）
+        if isinstance(_mod_rc, int) and _mod_rc != 0:
+            sys.exit(_mod_rc)
     else:
         log(f"[错误] 模块 {module_name} 缺少 main() 入口函数", force=True)
         sys.exit(EXIT_BAD_ARGS)
@@ -5052,6 +5148,8 @@ def main():
         "diff-report": ("report_generator", "diff-report"),
         "quality-report": ("report_generator", "quality-report"),
         "archive": ("report_generator", "archive"),
+        # label_verify.py - 预标注一致性验证（v2.7 新增）
+        "label-verify": ("label_verify", None),
     }
     if cmd in _V26_DELEGATE:
         module_name, sub_cmd = _V26_DELEGATE[cmd]
@@ -5246,7 +5344,31 @@ def main():
 
             # 元数据相同仅作为候选提示，真实重复必须通过视觉/音频相似度确认。
             # 不再直接注入 similarity=1.0，避免同大小同时间戳文件误报。
-            groups = build_groups(similar_pairs, mp4_files, video_hashes, keep_strategy)
+            groups = build_groups(similar_pairs, mp4_files, video_hashes, keep_strategy,
+                                  min_group_sim=getattr(args, "group_min_sim", 0.0))
+            # 【v2.7 新增】查重与标注联动：识别混合标注分组并告警
+            _label_regex = getattr(args, "label_regex", "")
+            if _label_regex:
+                import re as _re
+                try:
+                    _pat = _re.compile(_label_regex)
+                    _mixed_cnt = 0
+                    for _g in groups:
+                        _lbls = set()
+                        for _idx, _info in _g["members"]:
+                            _m = _pat.search(os.path.splitext(_info.get("name", ""))[0])
+                            if _m and _m.group(1):
+                                _lbls.add(_m.group(1))
+                        _g["labels"] = sorted(_lbls)
+                        _g["mixed_labels"] = len(_lbls) > 1
+                        if _g["mixed_labels"]:
+                            _mixed_cnt += 1
+                    if _mixed_cnt:
+                        log(f"  [标注联动] {_mixed_cnt}/{len(groups)} 个分组混合了不同标注"
+                            f"（pos/neg 或多行为），多为固定机位场景误聚，"
+                            f"清理前务必人工复核", force=True)
+                except _re.error as _exc:
+                    log(f"  [警告] --label-regex 无效: {_exc}", force=True)
 
         # 5. 导出
         log("\n[步骤5] 导出结果文件...", force=True)
