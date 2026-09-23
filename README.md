@@ -22,8 +22,8 @@ flowchart TD
     I -- 不相似 --> K[保留为独立视频]
     J --> M[导出报告<br/>TXT/MD/HTML/XLSX/CSV + summary JSON]
     M --> N{审阅清理计划后执行?}
-    N -- --confirm-cleanup --> O[移入隔离区 trash/操作ID<br/>记录 SHA-256 可恢复]
-    N -- 仅预览默认 --> P[流程结束<br/>不移动任何文件]
+    N -->|传入 --confirm-cleanup| O[移入隔离区 trash/操作ID<br/>记录 SHA-256 可恢复]
+    N -->|默认仅预览| P[流程结束<br/>不移动任何文件]
     O --> Q[事后可恢复 / 过期自动清理]
 ```
 
