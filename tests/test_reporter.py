@@ -106,14 +106,22 @@ class TestCleanupScriptGeneration:
         bat = (out / "cleanup_duplicates.bat").read_text("utf-8")
         assert files[to_clean_idx]["name"] in bat, "脚本应包含待清理文件"
 
-    def test_home_dir_auto_protected(self, scan_fixture):
-        """默认自动保护用户主目录：其下所有文件不得进入清理计划"""
+    def test_home_dir_auto_protected(self, scan_fixture, monkeypatch):
+        """默认自动保护用户主目录：其下所有文件不得进入清理计划。
+
+        不依赖真实 HOME 与 tmp_path 的相对位置（ubuntu runner 的 tmp 在
+        /tmp 下而非 ~ 下），改为把 expanduser 模拟为返回 tmp_path 本身，
+        使"主目录"恰好覆盖测试视频所在目录，在各平台行为一致。
+        """
         tmp_path, files, hashes, groups = scan_fixture
+        import video_dedup.cleanup as cleanup_mod
+        monkeypatch.setattr(cleanup_mod.os.path, "expanduser",
+                            lambda p: str(tmp_path))
         out = tmp_path / "out6"
         out.mkdir()
         generate_cleanup_script(groups, files, str(out), hard_delete=False)
         plan = json.loads((out / "cleanup_plan.json").read_text("utf-8"))
-        assert plan["items"] == [], "用户目录下的测试文件必须被默认保护排除"
+        assert plan["items"] == [], "受保护主目录下的文件必须被默认排除"
 
     def test_protect_folder_excluded_from_cleanup(self, scan_fixture,
                                                   monkeypatch):
