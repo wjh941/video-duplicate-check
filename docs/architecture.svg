@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 600" font-family="'Segoe UI','Microsoft YaHei','PingFang SC','Noto Sans CJK SC',sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+    </marker>
+    <marker id="arrd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1180" height="600" fill="#ffffff"/>
+
+  <!-- 标题 -->
+  <text x="590" y="42" text-anchor="middle" font-size="21" font-weight="700" fill="#0f172a">video-duplicate-check 处理流水线与模块架构</text>
+
+  <!-- 使用入口 -->
+  <rect x="40" y="70" width="1100" height="62" rx="12" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="58" y="107" font-size="13" font-weight="700" fill="#475569">使用入口</text>
+  <rect x="150" y="84" width="235" height="34" rx="8" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="267" y="106" text-anchor="middle" font-size="12.5" fill="#334155">find_mp4.py · CLI 主入口</text>
+  <rect x="400" y="84" width="250" height="34" rx="8" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="525" y="106" text-anchor="middle" font-size="12.5" fill="#334155">pipeline.py · 数据集一键体检</text>
+  <rect x="665" y="84" width="235" height="34" rx="8" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="782" y="106" text-anchor="middle" font-size="12.5" fill="#334155">dashboard.py · Streamlit 看板</text>
+  <rect x="915" y="84" width="210" height="34" rx="8" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="1020" y="106" text-anchor="middle" font-size="12.5" fill="#334155">batch_tools.py · 批量处理</text>
+
+  <!-- 入口 → 扫描 -->
+  <line x1="120" y1="132" x2="120" y2="176" stroke="#64748b" stroke-width="1.6" marker-end="url(#arr)"/>
+
+  <!-- 主流程六阶段 -->
+  <rect x="40" y="182" width="160" height="92" rx="10" fill="#dbeafe" stroke="#3b82f6"/>
+  <text x="120" y="208" text-anchor="middle" font-size="14.5" font-weight="700" fill="#1e3a8a">① 扫描 scanner</text>
+  <text x="120" y="232" text-anchor="middle" font-size="11.5" fill="#334155">文件发现 · ignore 规则</text>
+  <text x="120" y="250" text-anchor="middle" font-size="11.5" fill="#334155">时长 / 分辨率 / 低质过滤</text>
+
+  <rect x="220" y="182" width="160" height="92" rx="10" fill="#dcfce7" stroke="#22c55e"/>
+  <text x="300" y="208" text-anchor="middle" font-size="14.5" font-weight="700" fill="#14532d">② 哈希 hasher</text>
+  <text x="300" y="232" text-anchor="middle" font-size="11.5" fill="#334155">pHash + dHash 双哈希</text>
+  <text x="300" y="250" text-anchor="middle" font-size="11.5" fill="#334155">抽帧 · MD5/SHA-256</text>
+
+  <rect x="400" y="182" width="160" height="92" rx="10" fill="#fef9c3" stroke="#eab308"/>
+  <text x="480" y="208" text-anchor="middle" font-size="14.5" font-weight="700" fill="#713f12">③ 比对 compare</text>
+  <text x="480" y="232" text-anchor="middle" font-size="11.5" fill="#334155">LSH 多 band 候选对</text>
+  <text x="480" y="250" text-anchor="middle" font-size="11.5" fill="#334155">0.7 / 0.3 融合相似度</text>
+
+  <rect x="580" y="182" width="160" height="92" rx="10" fill="#fae8ff" stroke="#c084fc"/>
+  <text x="660" y="208" text-anchor="middle" font-size="14.5" font-weight="700" fill="#581c87">④ 分组 grouper</text>
+  <text x="660" y="232" text-anchor="middle" font-size="11.5" fill="#334155">连通图合并</text>
+  <text x="660" y="250" text-anchor="middle" font-size="11.5" fill="#334155">保留策略 × 4</text>
+
+  <rect x="760" y="182" width="160" height="92" rx="10" fill="#ffe4e6" stroke="#fb7185"/>
+  <text x="840" y="208" text-anchor="middle" font-size="14.5" font-weight="700" fill="#881337">⑤ 报告 reporter</text>
+  <text x="840" y="232" text-anchor="middle" font-size="11.5" fill="#334155">TXT / MD / HTML / XLSX</text>
+  <text x="840" y="250" text-anchor="middle" font-size="11.5" fill="#334155">CSV · summary JSON</text>
+
+  <rect x="940" y="182" width="160" height="92" rx="10" fill="#e0f2fe" stroke="#0ea5e9"/>
+  <text x="1020" y="208" text-anchor="middle" font-size="14.5" font-weight="700" fill="#0c4a6e">⑥ 清理 cleanup</text>
+  <text x="1020" y="232" text-anchor="middle" font-size="11.5" fill="#334155">计划 → 审阅 → 隔离区</text>
+  <text x="1020" y="250" text-anchor="middle" font-size="11.5" fill="#334155">SHA-256 · 可恢复</text>
+
+  <!-- 主流程连接箭头 -->
+  <line x1="200" y1="228" x2="216" y2="228" stroke="#64748b" stroke-width="1.6" marker-end="url(#arr)"/>
+  <line x1="380" y1="228" x2="396" y2="228" stroke="#64748b" stroke-width="1.6" marker-end="url(#arr)"/>
+  <line x1="560" y1="228" x2="576" y2="228" stroke="#64748b" stroke-width="1.6" marker-end="url(#arr)"/>
+  <line x1="740" y1="228" x2="756" y2="228" stroke="#64748b" stroke-width="1.6" marker-end="url(#arr)"/>
+  <line x1="920" y1="228" x2="936" y2="228" stroke="#64748b" stroke-width="1.6" marker-end="url(#arr)"/>
+
+  <!-- 旁挂模块 -->
+  <rect x="40" y="330" width="160" height="84" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="120" y="354" text-anchor="middle" font-size="13" font-weight="700" fill="#475569">config.ini</text>
+  <text x="120" y="376" text-anchor="middle" font-size="11" fill="#475569">[scan] / [weights]</text>
+  <text x="120" y="393" text-anchor="middle" font-size="11" fill="#475569">阈值 · 权重 · 输出</text>
+  <line x1="120" y1="330" x2="120" y2="278" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#arrd)"/>
+
+  <rect x="220" y="330" width="160" height="84" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="300" y="354" text-anchor="middle" font-size="13" font-weight="700" fill="#475569">哈希缓存 cache</text>
+  <text x="300" y="376" text-anchor="middle" font-size="11" fill="#475569">JSON / SQLite · gzip</text>
+  <text x="300" y="393" text-anchor="middle" font-size="11" fill="#475569">增量 · 合并 · 过期清理</text>
+  <line x1="300" y1="330" x2="300" y2="278" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="5 4" marker-start="url(#arrd)" marker-end="url(#arrd)"/>
+
+  <rect x="400" y="330" width="180" height="84" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="490" y="354" text-anchor="middle" font-size="13" font-weight="700" fill="#475569">可选增强</text>
+  <text x="490" y="376" text-anchor="middle" font-size="11" fill="#475569">音频哈希 --audio-check</text>
+  <text x="490" y="393" text-anchor="middle" font-size="11" fill="#475569">CLIP 语义 --semantic</text>
+  <line x1="490" y1="330" x2="490" y2="278" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#arrd)"/>
+
+  <rect x="580" y="330" width="200" height="84" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="680" y="354" text-anchor="middle" font-size="13" font-weight="700" fill="#475569">AI 与扩展脚本（可选依赖）</text>
+  <text x="680" y="376" text-anchor="middle" font-size="11" fill="#475569">ai_semantic · label_verify</text>
+  <text x="680" y="393" text-anchor="middle" font-size="11" fill="#475569">media_analyze · report_generator</text>
+  <line x1="770" y1="330" x2="770" y2="278" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#arrd)"/>
+
+  <!-- 报告/清理 → 输出 -->
+  <line x1="860" y1="274" x2="860" y2="464" stroke="#64748b" stroke-width="1.6" marker-end="url(#arr)"/>
+  <line x1="1020" y1="274" x2="1020" y2="464" stroke="#64748b" stroke-width="1.6" marker-end="url(#arr)"/>
+
+  <!-- 输出产物 -->
+  <rect x="40" y="470" width="1100" height="62" rx="12" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="58" y="507" font-size="13" font-weight="700" fill="#475569">输出产物</text>
+  <rect x="150" y="484" width="270" height="34" rx="8" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="285" y="506" text-anchor="middle" font-size="12" fill="#334155">duplicate_groups.html / .csv / .txt</text>
+  <rect x="435" y="484" width="250" height="34" rx="8" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="560" y="506" text-anchor="middle" font-size="12" fill="#334155">similar_result.csv · bad_video_list.txt</text>
+  <rect x="700" y="484" width="240" height="34" rx="8" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="820" y="506" text-anchor="middle" font-size="12" fill="#334155">scan_summary.json · cleanup_plan.json</text>
+  <rect x="955" y="484" width="170" height="34" rx="8" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="1040" y="506" text-anchor="middle" font-size="11.5" fill="#334155">trash/操作ID + 恢复脚本</text>
+
+  <!-- 图例 -->
+  <text x="40" y="568" font-size="12" fill="#64748b">实线 = 主流程依赖　　虚线 = 可选增强 / 旁挂数据　　未安装可选依赖时，主流程（① → ⑥）完整可用</text>
+</svg>

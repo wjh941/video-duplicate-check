@@ -9,6 +9,11 @@ jobs:
   test:
     name: pytest (${{ matrix.os }}, py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
+    env:
+      # 遗留自测脚本输出中文：Windows 运行器默认 cp1252 会 UnicodeEncodeError，
+      # 统一强制 UTF-8（与 video_dedup/__init__.py 的 stdout 加固双保险）。
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
     strategy:
       fail-fast: false
       matrix:
@@ -33,6 +38,12 @@ jobs:
       - name: Run test suite with coverage
         run:
           pytest tests --cov=video_dedup --cov-report=term-missing --cov-report=xml
+
+      - name: Dump pytest failures to job summary
+        if: failure()
+        shell: bash
+        run: |
+          pytest tests -q --tb=long 2>&1 | tail -n 220 >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: Legacy self-tests (no pytest, behavior parity)
         run: |

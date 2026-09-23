@@ -2,6 +2,33 @@
 
 基于感知哈希（pHash + dHash）的本地视频重复检测命令行工具：扫描指定目录，找出画面相似或重复的视频，生成对比报告和可恢复的安全清理方案。适合清理手机、相机、NAS 中堆积的重复素材，也支持为计算机视觉训练集做去重和标注。可选启用 CLIP 语义分析、Streamlit 可视化看板、批量处理与报告生成工具。
 
+![video-duplicate-check 处理流水线：使用入口（CLI/一键体检/看板/批量工具）→ 扫描过滤 → pHash+dHash 哈希提取 → LSH 候选与融合比对 → 连通图分组 → 报告导出 → 安全清理；旁挂哈希缓存、config.ini、音频哈希与 CLIP 可选增强](docs/architecture.svg)
+
+## 主流程
+
+```mermaid
+flowchart TD
+    A[find_mp4.py --dir 视频目录] --> B[扫描与过滤<br/>ignore 规则 · 时长/分辨率/低质]
+    B --> C{哈希缓存命中?}
+    C -- 命中 --> E[读取缓存哈希]
+    C -- 未命中 --> D[抽帧计算 pHash + dHash<br/>写入缓存]
+    D --> E
+    E --> F{视频数 > 50?}
+    F -- 是 --> G[LSH 多 band 分桶<br/>只生成候选对]
+    F -- 否 --> H[全量两两比对]
+    G --> I[融合相似度 ≥ 阈值 0.7?]
+    H --> I
+    I -- 相似 --> J[连通图合并为重复组<br/>每组按保留策略选保留者]
+    I -- 不相似 --> K[保留为独立视频]
+    J --> M[导出报告<br/>TXT/MD/HTML/XLSX/CSV + summary JSON]
+    M --> N{审阅清理计划后执行?}
+    N -- --confirm-cleanup --> O[移入隔离区 trash/操作ID<br/>记录 SHA-256 可恢复]
+    N -- 仅预览默认 --> P[流程结束<br/>不移动任何文件]
+    O --> Q[事后可恢复 / 过期自动清理]
+```
+
+感知哈希只看画面不看语义：相似 ≠ 同一内容，执行清理前请人工复核（详见 [docs/algorithm-notes.md](docs/algorithm-notes.md)）。
+
 ## 功能特性
 
 - **多格式扫描**：默认 MP4/MOV/MKV/AVI/WebM/M4V/FLV，可用 `--ext` 自定义；支持 `.duplicateignore` / `.globalignore` 排除规则、排除目录和文件大小过滤
