@@ -8,23 +8,23 @@
 
 ```mermaid
 flowchart TD
-    A[find_mp4.py --dir 视频目录] --> B[扫描与过滤<br/>ignore 规则 · 时长/分辨率/低质]
-    B --> C{哈希缓存命中?}
-    C -- 命中 --> E[读取缓存哈希]
-    C -- 未命中 --> D[抽帧计算 pHash + dHash<br/>写入缓存]
+    A["find_mp4.py --dir 视频目录"] --> B["扫描与过滤<br/>ignore 规则 · 时长/分辨率/低质"]
+    B --> C{"哈希缓存命中?"}
+    C -- 命中 --> E["读取缓存哈希"]
+    C -- 未命中 --> D["抽帧计算 pHash + dHash<br/>写入缓存"]
     D --> E
-    E --> F{视频数 > 50?}
-    F -- 是 --> G[LSH 多 band 分桶<br/>只生成候选对]
-    F -- 否 --> H[全量两两比对]
-    G --> I[融合相似度 ≥ 阈值 0.7?]
+    E --> F{"视频数 &gt; 50?"}
+    F -- 是 --> G["LSH 多 band 分桶<br/>只生成候选对"]
+    F -- 否 --> H["全量两两比对"]
+    G --> I["融合相似度 ≥ 阈值 0.7?"]
     H --> I
-    I -- 相似 --> J[连通图合并为重复组<br/>每组按保留策略选保留者]
-    I -- 不相似 --> K[保留为独立视频]
-    J --> M[导出报告<br/>TXT/MD/HTML/XLSX/CSV + summary JSON]
-    M --> N{审阅清理计划后执行?}
-    N -->|传入 --confirm-cleanup| O[移入隔离区 trash/操作ID<br/>记录 SHA-256 可恢复]
-    N -->|默认仅预览| P[流程结束<br/>不移动任何文件]
-    O --> Q[事后可恢复 / 过期自动清理]
+    I -- 相似 --> J["连通图合并为重复组<br/>每组按保留策略选保留者"]
+    I -- 不相似 --> K["保留为独立视频"]
+    J --> M["导出报告<br/>TXT/MD/HTML/XLSX/CSV + summary JSON"]
+    M --> N{"审阅清理计划后执行?"}
+    N -->|"传入 --confirm-cleanup"| O["移入隔离区 trash/操作ID<br/>记录 SHA-256 可恢复"]
+    N -->|"默认仅预览"| P["流程结束<br/>不移动任何文件"]
+    O --> Q["事后可恢复 / 过期自动清理"]
 ```
 
 感知哈希只看画面不看语义：相似 ≠ 同一内容，执行清理前请人工复核（详见 [docs/algorithm-notes.md](docs/algorithm-notes.md)）。
