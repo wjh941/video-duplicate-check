@@ -25,22 +25,39 @@
 
 ```
 video-duplicate-check/
-├── find_mp4.py          # 主程序：扫描/比对/分组/导出/安全清理 + 内置子命令
-├── ai_semantic.py       # AI 语义分析：CLIP 场景/用途判定、聚类、自动分类
-├── label_verify.py      # 预标注一致性验证：识别预标注 → 抽帧对比 → 错标检测
-├── dashboard.py         # Streamlit 可视化看板（10 个面板）
-├── pipeline.py          # 数据集一键体检：查重 + 标注验证 + A/B/C 体检报告
-├── review_tools.py      # 嫌疑复核逻辑模块（供看板复核工作台调用）
-├── batch_tools.py       # 批量工具：多目录扫描/缩略图/备份/硬链接/整理/片段提取
-├── media_analyze.py     # 媒体分析：元数据 Excel/磁盘分析/标签/语义检索/快照/对比
-├── report_generator.py  # 报告系统：综合 HTML/PDF/质检/对比/归档
-├── config.ini           # 配置文件模板（[scan] / [weights] 段）
-├── dataset_labels.ini   # AI 场景、物体、行为、用途标签配置
-├── requirements.txt     # 全量依赖（含可选依赖）
-├── requirements_ai.txt  # AI 扩展依赖
-├── install.bat          # Windows 安装脚本（基础版 / AI 增强版二选一）
-├── install_ai.bat       # Windows AI 依赖安装脚本（含国内镜像配置）
-├── test_demo.py         # 独立自测脚本
+├── find_mp4.py            # 兼容入口（瘦壳）：聚合导出 video_dedup 全部公开名字
+├── video_dedup/           # 核心包（v2.9 自 find_mp4.py 按职责拆分）
+│   ├── constants.py       #   全局常量 / 输出文件名 / 错误码 / 退出码
+│   ├── context.py         #   AppContext 全局状态单例 + 双输出日志系统
+│   ├── utils.py           #   路径解析 / 格式化 / 原子写入 / MD5·SHA-256
+│   ├── scanner.py         #   目录扫描 + 文件发现 + ignore 规则 + 时长/分辨率/低质过滤
+│   ├── cache.py           #   哈希缓存（JSON/SQLite、合并、校验、过期清理、增量进度）
+│   ├── hasher.py          #   pHash/dHash 计算 + 关键帧检测 + 音频哈希 + 带缓存提取
+│   ├── compare.py         #   LSH 多 band 分桶 + 双哈希融合相似度 + 候选对生成
+│   ├── grouper.py         #   连通图分组 + 最低组内相似度拆分 + 保留策略
+│   ├── reporter.py        #   CSV/TXT/MD/HTML/XLSX 导出 + 扫描摘要 + 终端汇总
+│   ├── cleanup.py         #   安全清理：计划生成/校验/执行/恢复/过期清理
+│   ├── cli.py             #   argparse 入口 + 子命令分发 + 主扫描流程
+│   ├── label_verify.py    #   转发层（实现见根目录 label_verify.py）
+│   └── ai_semantic.py     #   转发层（实现见根目录 ai_semantic.py）
+├── ai_semantic.py         # AI 语义分析：CLIP 场景/用途判定、聚类、自动分类（可独立运行）
+├── label_verify.py        # 预标注一致性验证：识别预标注 → 抽帧对比 → 错标检测（可独立运行）
+├── dashboard.py           # Streamlit 可视化看板（10 个面板）
+├── pipeline.py            # 数据集一键体检：查重 + 标注验证 + A/B/C 体检报告
+├── review_tools.py        # 嫌疑复核逻辑模块（供看板复核工作台调用）
+├── batch_tools.py         # 批量工具：多目录扫描/缩略图/备份/硬链接/整理/片段提取
+├── media_analyze.py       # 媒体分析：元数据 Excel/磁盘分析/标签/语义检索/快照/对比
+├── report_generator.py    # 报告系统：综合 HTML/PDF/质检/对比/归档
+├── config.ini             # 配置文件模板（[scan] / [weights] 段）
+├── dataset_labels.ini     # AI 场景、物体、行为、用途标签配置
+├── requirements.txt       # 全量依赖（含可选依赖）
+├── requirements_ai.txt    # AI 扩展依赖
+├── requirements-dev.txt   # 测试/开发依赖（pytest、pytest-cov）
+├── install.bat            # Windows 安装脚本（基础版 / AI 增强版二选一）
+├── install_ai.bat         # Windows AI 依赖安装脚本（含国内镜像配置）
+├── tests/                 # pytest 套件（OpenCV 合成视频 fixture，无需真实素材）
+├── docs/algorithm-notes.md # 算法选型笔记：双哈希 / LSH 实验 / CLIP 融合
+├── test_demo.py           # 独立自测脚本
 └── README.md
 ```
 
@@ -352,6 +369,34 @@ audio_weight = 0.8
 
 ## 测试与自检
 
+### pytest 套件（推荐）
+
+```bash
+pip install -r requirements-dev.txt
+
+# 全量测试（OpenCV 现场合成测试视频，无需真实素材，约 5 秒）
+pytest
+
+# 带覆盖率报告
+pytest --cov=video_dedup --cov-report=term-missing
+
+# 只跑某一模块的测试
+pytest tests/test_lsh.py        # LSH 分桶与召回回归
+pytest tests/test_similarity.py # 相似度融合与阈值边界
+```
+
+测试覆盖：哈希确定性/鲁棒性（test_hashing）、LSH 召回回归（test_lsh）、
+相似度融合与阈值边界（test_similarity）、分组与保留策略（test_grouper）、
+安全清理全流程含 SHA-256 恢复（test_cleanup）、预标注识别与判定（test_label_verify）、
+报告导出与清理脚本生成（test_reporter）、端到端退出码契约 0/1/2/3 与
+scan_summary.json schema（test_end_to_end）。参数与算法取舍的推导过程见
+`docs/algorithm-notes.md`。
+
+GitHub Actions（`.github/workflows/ci.yml`）在 Ubuntu/Windows × Python 3.9/3.11/3.12
+矩阵上自动运行 pytest + 覆盖率与两个遗留自测脚本。
+
+### 遗留自测脚本
+
 ```bash
 # 独立自测脚本：构造测试视频跑通扫描、导出、筛选等主要流程
 python test_demo.py
@@ -364,16 +409,16 @@ python find_mp4.py test
 python test_regression.py
 ```
 
-项目没有接入 pytest 等测试框架，以上三个脚本即为全部自动化测试；`test_regression.py` 覆盖 v2.6.1–v2.8 实战修复过的高危回归点。
-
 ## 已知边界
 
 - 扩展子命令（`batch-scan`、`media-info`、`label-verify` 等）的模块专属参数自 v2.7 起可直接转发（主程序参数解析改为宽松模式，未知参数由被委托模块自行解析），模块返回的整数退出码也会透传。
 - pHash/dHash 是画面相似度筛选手段，不是内容鉴定：相似不等于同一内容。执行清理前请务必人工复核清理计划，重要素材先备份。
 - `similar-search` 依赖缓存中的 CLIP 特征（`semantic_emb`），需要先对相应目录完成语义分析。
-- 本仓库未包含开源许可证文件，使用前请与作者确认授权方式。
+- 本仓库以 [MIT License](LICENSE) 开源。
 
 ## 版本历史
+
+- **v2.9.0** — 工程化重构：`find_mp4.py`（5600+ 行单文件）按职责拆分为 `video_dedup/` 包（scanner/hasher/compare/grouper/cleanup/reporter/cache/cli 等 11 个模块），`find_mp4.py` 变为聚合导出的瘦入口，全部既有 `from find_mp4 import X` 用法保持兼容；接入 pytest 测试套件（141 用例 + 覆盖率 + GitHub Actions 矩阵 CI）；新增 MIT LICENSE 与 `docs/algorithm-notes.md` 算法选型笔记；修复 v2.8 遗留问题：auto-classify 引用未定义的 `scan_videos`（必现 NameError）、HTML 报告成员渲染循环被错误嵌进混合标注条件（普通分组渲染为空）；AI 依赖改为延迟加载，非 AI 路径启动从 ~9s 降到 <0.5s
 
 - **v2.8.0** — 数据集一键体检 `find_mp4.py pipeline`（查重+标注验证+A/B/C 体检报告与建议行动）；看板新增『嫌疑复核』工作台（并排播放对照、逐项判定、导出修正标签 CSV 与复核摘要，review_tools.py）；场景预设 `--preset surveillance/footage`（find_mp4/label_verify/pipeline 三处生效）；label_verify 新增 `--summary-json` 机器可读摘要
 - **v2.7.0** — label_verify：运动前景哈希与静止机位检测（`--motion-hash`）、neg 样本 CLIP 行为验证（`--verify-neg`）、数据用途问卷与参考建议（`--purpose`）、每组建议与总结、HTML 点击播放原视频与折叠分页、CLIP hf-mirror 自动回退；find_mp4：分组最低相似度约束（`--group-min-sim`，complete-linkage 拆分遏制传递性误差）、`--label-regex` 混合标注分组告警、`label-verify` 子命令、summary JSON 增加分组标签字段；dashboard 新增标注验证面板（9 面板）；子命令模式参数转发修复

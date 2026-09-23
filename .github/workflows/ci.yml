@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    name: pytest (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.9", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        # opencv-python-headless：CI 无 GUI 也可用 VideoWriter 合成测试视频
+        run: |
+          python -m pip install --upgrade pip
+          pip install opencv-python-headless numpy Pillow imagehash tqdm psutil
+          pip install pytest pytest-cov
+
+      - name: Run test suite with coverage
+        run:
+          pytest tests --cov=video_dedup --cov-report=term-missing --cov-report=xml
+
+      - name: Legacy self-tests (no pytest, behavior parity)
+        run: |
+          python find_mp4.py version
+          python find_mp4.py test
+
+      - name: Upload coverage artifact
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml

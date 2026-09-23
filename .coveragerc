@@ -1,0 +1,16 @@
+[run]
+source = video_dedup
+omit =
+    video_dedup/__pycache__/*
+
+[report]
+show_missing = true
+precision = 1
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+    except ImportError:
+    raise NotImplementedError
+
+[html]
+directory = htmlcov

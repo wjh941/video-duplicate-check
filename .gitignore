@@ -116,3 +116,9 @@ _*
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+
+# 测试覆盖率产物
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
