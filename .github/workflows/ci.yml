@@ -36,14 +36,21 @@ jobs:
           pip install pytest pytest-cov
 
       - name: Run test suite with coverage
-        run:
-          pytest tests --cov=video_dedup --cov-report=term-missing --cov-report=xml
+        shell: bash
+        run: |
+          pytest tests --cov=video_dedup --cov-report=term-missing --cov-report=xml 2>&1 | tee /tmp/pytest.log
+          exit ${PIPESTATUS[0]}
 
-      - name: Dump pytest failures to job summary
+      - name: Report pytest failures as annotations
         if: failure()
         shell: bash
         run: |
-          pytest tests -q --tb=long 2>&1 | tail -n 220 >> "$GITHUB_STEP_SUMMARY" || true
+          grep -E "^(FAILED|ERROR)" /tmp/pytest.log | head -n 8 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+          tail -n 3 /tmp/pytest.log | while IFS= read -r line; do
+            echo "::error::$line"
+          done
 
       - name: Legacy self-tests (no pytest, behavior parity)
         run: |
