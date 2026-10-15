@@ -20,13 +20,13 @@ v2.9 起本模块为唯一实现；仓库根目录 ai_semantic.py 仅是兼容�
     result = semantic_analyze_video("test.mp4", model, preprocess, device)
 """
 
+import csv
+import json
+import math
 import os
 import time
-import json
-import csv
-import math
 from collections import defaultdict
-from typing import Optional, Union
+from typing import Optional
 
 import numpy as np
 
@@ -244,7 +244,7 @@ def classify_video(
         }
 
     try:
-        import cv2
+        import cv2  # noqa: F401  仅探测 cv2 可用性（缺失时整段降级）
     except ImportError:
         return {"scene": [], "object": [], "action": [], "confidence": 0.0}
 
@@ -435,8 +435,6 @@ def compute_quality_score(frames_list: list) -> float:
     """
     if not frames_list:
         return 0.0
-
-    scores = []
 
     # 1. 清晰度：灰度方差
     sharpness_scores = []
@@ -1002,7 +1000,7 @@ def export_scene_cluster_html(
             "<div class='container'>\n",
             "<div class='header'>\n",
             "<h1>🎬 视频语义聚类报告</h1>\n",
-            f"<p>基于 CLIP 视觉特征的视频内容聚类分析</p>\n",
+            "<p>基于 CLIP 视觉特征的视频内容聚类分析</p>\n",
             "</div>\n",
             "<div class='stats'>\n",
             f"<div class='stat-card'><div class='number'>{total_clusters}</div><div class='label'>聚类数</div></div>\n",
@@ -1306,10 +1304,10 @@ def auto_classify_videos(
                         shutil.move(src, dst)
                 except (IOError, OSError) as e:
                     log(f"  [警告] 操作失败 {os.path.basename(src)}: {e}")
-        log(f"[完成] 文件分类操作完成")
+        log("[完成] 文件分类操作完成")
     elif dry_run:
-        log(f"\n[试运行] 分类结果已预览，未执行文件操作。")
-        log(f"  如需执行，请添加 --execute 参数（默认使用硬链接）")
+        log("\n[试运行] 分类结果已预览，未执行文件操作。")
+        log("  如需执行，请添加 --execute 参数（默认使用硬链接）")
 
     return {
         "clusters": {lid: paths for lid, paths in clusters.items()},

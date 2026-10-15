@@ -11,13 +11,18 @@ import time
 
 import cv2
 
-from .constants import (ERR_DECODE_ERROR, ERR_DISK_ERROR, ERR_LOW_QUALITY,
-                        ERR_PERMISSION, ERR_READ_FAILED, ERR_TIMEOUT,
-                        ERR_ZERO_FRAMES)
+from .constants import (
+    ERR_DECODE_ERROR,
+    ERR_DISK_ERROR,
+    ERR_LOW_QUALITY,
+    ERR_PERMISSION,
+    ERR_READ_FAILED,
+    ERR_TIMEOUT,
+    ERR_ZERO_FRAMES,
+)
 from .context import _get_memory_usage, log
 from .hasher import _video_quality_score
 from .utils import _atomic_write_text, _format_size
-
 
 
 def export_csv(similar_pairs: list[dict], csv_path: str, threshold: float,
@@ -83,7 +88,7 @@ def export_groups_txt(groups: list[dict], mp4_files: list[dict], group_path: str
 
         with open(group_path, "w", encoding="utf-8") as f:
             f.write("=" * 60 + "\n")
-            f.write(f"  MP4 相似视频分组报告\n")
+            f.write("  MP4 相似视频分组报告\n")
             f.write(f"  相似度阈值: {threshold:.0%}\n")
             f.write(f"  生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"  分组总数: {len(filtered)}\n")
@@ -149,7 +154,7 @@ def export_groups_md(groups: list[dict], mp4_files: list[dict], md_path: str,
                     total_savable += info["size"]
 
         with open(md_path, "w", encoding="utf-8") as f:
-            f.write(f"# MP4 相似视频分组报告\n\n")
+            f.write("# MP4 相似视频分组报告\n\n")
             f.write(f"- **相似度阈值**: {threshold:.0%}\n")
             f.write(f"- **生成时间**: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"- **分组总数**: {len(filtered)}\n")
@@ -284,13 +289,13 @@ def export_groups_html(groups: list[dict], mp4_files: list[dict], html_path: str
             ".thumb{width:80px;height:60px;object-fit:cover;border-radius:4px;margin-right:10px;border:1px solid #ddd}",
             ".thumb-placeholder{width:80px;height:60px;background:#eee;border-radius:4px;margin-right:10px;display:flex;align-items:center;justify-content:center;color:#999;font-size:11px}",
             "</style>\n</head>\n<body>\n",
-            f"<h1>MP4 相似视频分组报告</h1>\n",
-            f"<div class='stats'><div class='summary'>",
+            "<h1>MP4 相似视频分组报告</h1>\n",
+            "<div class='stats'><div class='summary'>",
             f"<div><h3>{len(mp4_files)}</h3><p>总视频数</p></div>",
             f"<div><h3>{len(filtered)}</h3><p>相似分组</p></div>",
             f"<div><h3>{_format_size(total_savable)}</h3><p>可节省空间</p></div>",
             f"<div><h3>{threshold:.0%}</h3><p>相似度阈值</p></div>",
-            f"</div></div>\n",
+            "</div></div>\n",
         ]
 
         # v2.2 语义统计面板
@@ -366,7 +371,7 @@ def export_groups_xlsx(similar_pairs: list[dict], groups: list[dict],
     """
     try:
         from openpyxl import Workbook
-        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.styles import Alignment, Font, PatternFill
     except ImportError:
         log("[错误] Excel 导出需要 openpyxl 库，请安装：")
         log("  pip install openpyxl")
@@ -480,7 +485,7 @@ def export_clean_list(groups: list[dict], mp4_files: list[dict],
             return parts[0] + "//.../" + "/".join(parts[-2:])
 
         buf = io.StringIO()
-        buf.write(f"# 待清理视频路径清单\n")
+        buf.write("# 待清理视频路径清单\n")
         buf.write(f"# 生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         total_clean = 0
         for gi, group in enumerate(groups, 1):

@@ -10,3 +10,8 @@ select = ["E4", "E7", "E9", "F", "I"]
 
 [lint.isort]
 known-first-party = ["video_dedup"]
+
+[lint.per-file-ignores]
+# dashboard.py 在模块顶部先做依赖存在性检查（缺依赖直接 sys.exit 提示安装），
+# 第三方库导入刻意排在检查之后，E402 属该门控模式的预期结果。
+"dashboard.py" = ["E402"]

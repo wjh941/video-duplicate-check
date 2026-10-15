@@ -5,10 +5,8 @@ import hashlib
 import cv2
 import imagehash
 import numpy as np
-import pytest
 
-from video_dedup.hasher import (_compute_frame_hashes, _extract_hashes_single,
-                                extract_hashes_with_cache)
+from video_dedup.hasher import _compute_frame_hashes, _extract_hashes_single, extract_hashes_with_cache
 from video_dedup.utils import _compute_file_md5, _compute_file_sha256
 
 

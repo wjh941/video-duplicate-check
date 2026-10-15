@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import os
 import subprocess
-from concurrent.futures import (FIRST_COMPLETED, ThreadPoolExecutor,
-                                TimeoutError as FutureTimeout, wait)
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import TimeoutError as FutureTimeout
 from typing import Optional
 
 import cv2
@@ -20,13 +20,21 @@ except ImportError:  # pragma: no cover
     TQDM_AVAILABLE = False
 
 from .cache import is_cache_valid, load_cache, save_cache
-from .constants import (CACHE_VERSION, ERR_DECODE_ERROR, ERR_DISK_ERROR,
-                        ERR_PERMISSION, ERR_READ_FAILED, ERR_TIMEOUT,
-                        ERR_ZERO_FRAMES, FFMPEG_AVAILABLE, FRAME_SAMPLE_RANGE,
-                        FRAME_TIMEOUT, HASH_SIZE)
+from .constants import (
+    CACHE_VERSION,
+    ERR_DECODE_ERROR,
+    ERR_DISK_ERROR,
+    ERR_PERMISSION,
+    ERR_READ_FAILED,
+    ERR_TIMEOUT,
+    ERR_ZERO_FRAMES,
+    FFMPEG_AVAILABLE,
+    FRAME_SAMPLE_RANGE,
+    FRAME_TIMEOUT,
+    HASH_SIZE,
+)
 from .context import _APP_CTX, _get_memory_usage, log
 from .utils import _compute_file_md5
-
 
 
 # ============================================================
@@ -311,7 +319,7 @@ def extract_hashes_with_cache(
 
     log(f"哈希提取：{len(video_hashes)} 个缓存命中，{len(to_compute)} 个待计算")
     if incremental:
-        log(f"  增量模式：仅处理新增/修改视频")
+        log("  增量模式：仅处理新增/修改视频")
 
     if not to_compute:
         return video_hashes, bad_videos, cache

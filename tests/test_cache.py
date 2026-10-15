@@ -3,11 +3,14 @@
 import json
 import os
 
-import pytest
-
-from video_dedup.cache import (clean_expired_cache, clean_invalid_cache,
-                               is_cache_valid, load_cache, merge_caches,
-                               save_cache)
+from video_dedup.cache import (
+    clean_expired_cache,
+    clean_invalid_cache,
+    is_cache_valid,
+    load_cache,
+    merge_caches,
+    save_cache,
+)
 
 
 def make_entry(path, size=10, mtime=1000.0, md5="abc"):

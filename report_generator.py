@@ -17,15 +17,13 @@ MP4 视频查重报告生成器
 通过 `from find_mp4 import ...` 复用现有函数与常量，不重复实现查重核心逻辑。
 """
 
+import argparse
 import os
 import sys
-import json
 import time
 import zipfile
-import argparse
-import shutil
 from html.parser import HTMLParser
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from xml.sax.saxutils import escape as _xml_escape
 
 # ============================================================
@@ -35,18 +33,14 @@ from xml.sax.saxutils import escape as _xml_escape
 # 复用 find_mp4 现有函数与常量（load_cache / _resolve_path / log 等）
 try:
     from find_mp4 import (  # type: ignore
-        load_cache,
-        _resolve_path,
-        log,
-        _format_size,
-        _atomic_write_text,
-        compute_similarity,
-        find_similar_pairs,
-        build_groups,
         CACHE_FILE,
-        SEMANTIC_META,
-        AUDIT_LOG,
         CACHE_VERSION,
+        _atomic_write_text,
+        _format_size,
+        build_groups,
+        find_similar_pairs,
+        load_cache,
+        log,
     )
     _FIND_MP4_OK = True
     _IMPORT_ERROR = ""
@@ -64,10 +58,10 @@ except ImportError:
 # 可选 PDF 依赖：reportlab（优先）
 try:
     from reportlab.lib.pagesizes import A4  # type: ignore
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet  # type: ignore
     from reportlab.lib.units import mm  # type: ignore
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle  # type: ignore
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer  # type: ignore
     from reportlab.pdfgen import canvas as _rl_canvas  # type: ignore
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer  # type: ignore
     _REPORTLAB_OK = True
 except ImportError:
     _REPORTLAB_OK = False
@@ -994,7 +988,6 @@ def generate_diff_report(
     old_groups = _compute_duplicate_groups(old_cache)[0]
     new_groups = _compute_duplicate_groups(new_cache)[0]
     old_sets = _group_sets(old_groups)
-    new_sets = _group_sets(new_groups)
 
     # 新增重复分组：新分组中存在成员路径组合在旧分组中未出现
     new_dup_groups = []

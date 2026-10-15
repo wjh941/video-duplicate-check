@@ -9,13 +9,17 @@ import shutil
 import time
 import uuid
 
-from .constants import (AUDIT_LOG, CLEANUP_PLAN_FILE, CLEANUP_SCRIPT_LINUX,
-                        CLEANUP_SCRIPT_WIN, EXIT_BAD_ARGS, EXIT_OK,
-                        EXIT_PARSE_ERROR)
+from .constants import (
+    AUDIT_LOG,
+    CLEANUP_PLAN_FILE,
+    CLEANUP_SCRIPT_LINUX,
+    CLEANUP_SCRIPT_WIN,
+    EXIT_BAD_ARGS,
+    EXIT_OK,
+    EXIT_PARSE_ERROR,
+)
 from .context import log, repo_dir
-from .utils import (_atomic_write_text, _compute_file_sha256, _format_size,
-                    _normalize_path, _resolve_path)
-
+from .utils import _atomic_write_text, _compute_file_sha256, _format_size, _normalize_path, _resolve_path
 
 
 def generate_cleanup_script(

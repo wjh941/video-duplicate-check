@@ -66,9 +66,9 @@ from collections import defaultdict
 from pathlib import Path
 
 import cv2
+import imagehash
 import numpy as np
 from PIL import Image
-import imagehash
 
 # ============================================================
 # 常量
@@ -473,8 +473,8 @@ def _clip_check() -> bool:
         return _CLIP["ok"]
     _CLIP["checked"] = True
     try:
-        import torch  # noqa: F401
         import open_clip
+        import torch  # noqa: F401
         device = "cuda" if torch.cuda.is_available() else "cpu"
         try:
             model, _, preprocess = open_clip.create_model_and_transforms(
@@ -535,10 +535,10 @@ def verify_neg_with_clip(label_map: dict, sigs: dict, neg_marker: str = "neg",
     neg 样本专用验证（v0.2 新增）：对名称带 neg 标记的视频，
     用 CLIP 判断其是否疑似包含目标行为。返回 findings 列表。
     """
-    import torch
     import open_clip
-    model, preprocess, device = _CLIP["model"], _CLIP["preprocess"], _CLIP["device"]
-    labels = {l for l in label_map.values() if l}
+    import torch
+    model, _preprocess, device = _CLIP["model"], _CLIP["preprocess"], _CLIP["device"]
+    labels = {lab for lab in label_map.values() if lab}
     prompts, names = _build_behavior_prompts(labels, neg_marker)
     if not prompts:
         return []
@@ -766,8 +766,8 @@ def _purpose_guidance(purpose: str, result: dict, args) -> list:
     stats = result["label_stats"]
     labels = result["labels"]
     n_videos = sum(st["count"] for st in stats.values())
-    multi = [l for l, st in stats.items() if st["count"] >= 2]
-    counts = [stats[l]["count"] for l in multi] or [0]
+    multi = [lab for lab, st in stats.items() if st["count"] >= 2]
+    counts = [stats[lab]["count"] for lab in multi] or [0]
     # v2.8 兼容：suspects 可为列表（本工具内部）或数量（pipeline 传入）
     _sus = result["suspects"]
     n_suspects = len(_sus) if isinstance(_sus, (list, tuple)) else int(_sus or 0)
@@ -797,7 +797,7 @@ def _purpose_guidance(purpose: str, result: dict, args) -> list:
                     "属固定机位场景的预期现象，判断行为一致性请以运动能量/CLIP 特征为主。"
                     % (result["separation"], result["global_intra"], result["global_inter"]))
     if args.use_clip and not getattr(args, "verify_neg", False):
-        neg_cnt = sum(1 for l in labels if "neg" in l.lower())
+        neg_cnt = sum(1 for lab in labels if "neg" in lab.lower())
         if neg_cnt:
             tips.append("检测到 %d 个含 neg 的标签但未启用 --verify-neg：建议开启以验证 neg 样本确实不含目标行为。" % neg_cnt)
     tips.append("共 %d 个视频、%d 个标签（可验证标签 %d 个）。" % (n_videos, len(labels), len(multi)))
@@ -1020,14 +1020,14 @@ def write_report_html(out_path: str, result: dict, label_map: dict, sigs: dict, 
 
     # 锚点导航
     html.append("<div class='nav'>" + "".join(
-        "<a href='#lbl%d'>%s(%d)%s</a>" % (i, l, result["label_stats"][l]["count"],
-                                           "⚠" if any(s["label"] == l for s in result["suspects"]) else "")
-        for i, l in enumerate(result["labels"])) + "</div>")
+        "<a href='#lbl%d'>%s(%d)%s</a>" % (i, lab, result["label_stats"][lab]["count"],
+                                           "⚠" if any(s["label"] == lab for s in result["suspects"]) else "")
+        for i, lab in enumerate(result["labels"])) + "</div>")
 
     if result["confusion"]:
         labels = result["labels"]
         html.append("<h2>标签间平均相似度矩阵</h2><table><tr><th></th>"
-                    + "".join("<th>%s</th>" % l for l in labels) + "</tr>")
+                    + "".join("<th>%s</th>" % lab for lab in labels) + "</tr>")
         for la in labels:
             row = ["<tr><th>%s</th>" % la]
             for lb in labels:
@@ -1161,7 +1161,7 @@ def main():
         log("[错误] 预标注识别失败: %s" % exc)
         return EXIT_BAD_ARGS
     args.label_from = used_mode
-    labeled = {p: l for p, l in label_map.items() if l}
+    labeled = {p: lab for p, lab in label_map.items() if lab}
     unlabeled = len(videos) - len(labeled)
     n_labels = len(set(labeled.values()))
     log("      标签来源: %s ｜ 已标注 %d 个 ｜ 未标注 %d 个 ｜ 标签数 %d ｜ 用途: %s(%s)"

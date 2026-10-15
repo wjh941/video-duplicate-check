@@ -26,12 +26,12 @@ media_analyze.py - MP4 视频查重工具扩展分析模块 (v1.0)
 使用示例见文件末尾。
 """
 
+import argparse
+import json
 import os
 import sys
-import json
 import time
 import zipfile
-import argparse
 from argparse import Namespace
 from typing import Optional
 
@@ -86,15 +86,12 @@ def _check_deps() -> None:
 
 try:
     from find_mp4 import (
-        load_cache,
-        scan_mp4_files,
-        _resolve_path,
-        _normalize_path,
-        parse_duration_filter,
-        match_duration,
-        log,
         CACHE_FILE,
-        SEMANTIC_META,
+        _normalize_path,
+        _resolve_path,
+        load_cache,
+        log,
+        scan_mp4_files,
     )
 except ImportError as _e:
     print("[致命错误] 无法导入 find_mp4 模块，请确认 media_analyze.py 与 find_mp4.py 位于同一目录。")
@@ -104,7 +101,7 @@ except ImportError as _e:
 
 # 复用 ai_semantic.py 中的 CLIP 能力（可选，缺失自动降级）
 try:
-    from ai_semantic import load_clip_model, CLIP_OK, TORCH_OK
+    from ai_semantic import CLIP_OK, TORCH_OK, load_clip_model
 except ImportError:
     # ai_semantic 缺失时降级为关键词匹配
     load_clip_model = None
@@ -667,8 +664,8 @@ def similar_search(
     text_feature = None
     if use_clip:
         try:
-            import torch
             import open_clip
+            import torch
             model, preprocess, device = load_clip_model()
             if model is not None:
                 tokenizer = open_clip.get_tokenizer("ViT-B-32")
@@ -895,8 +892,8 @@ def diff_scan(
         "",
         "## 概览",
         "",
-        f"| 类别 | 数量 |",
-        f"|------|------|",
+        "| 类别 | 数量 |",
+        "|------|------|",
         f"| 新增视频 | {len(added)} |",
         f"| 已清理视频 | {len(removed)} |",
         f"| 新增重复分组 | {len(new_dup_groups)} |",

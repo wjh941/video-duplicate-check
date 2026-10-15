@@ -34,34 +34,69 @@ except ImportError:  # pragma: no cover
 
 # 说明：本模块命名空间是 find_mp4.py 兼容层的聚合来源（`from find_mp4 import X`）。
 # 下列导入以内部使用为主；带 noqa 的名字是仅为兼容层保留的再导出，勿随意删除。
-from .cache import (clean_expired_cache, clean_invalid_cache, load_cache,
-                    merge_caches, save_cache)
-from .cleanup import (_run_execute_plan, _run_gen_restore, _run_list_operations,
-                      _run_purge_operations, _run_restore_operation,
-                      _run_validate_plan, export_audit_log,
-                      generate_cleanup_script)
-from .compare import (_build_lsh_buckets, compute_similarity, find_similar_pairs,
-                      pre_filter_by_metadata)
-from .constants import (BAD_VIDEO_LIST, CACHE_FILE, CACHE_VERSION,
-                        CLEANUP_PLAN_FILE, CLEAN_LIST_FILE, DATASET_CATALOG,
-                        DATASET_STATS, EXIT_BAD_ARGS, EXIT_HAS_DUPLICATES,
-                        EXIT_OK, EXIT_PARSE_ERROR, FAST_FRAMES, FAST_THRESHOLD,
-                        FFMPEG_AVAILABLE, HASH_EXPORT, RESULT_CSV,
-                        RESULT_GROUPS, RESULT_GROUPS_HTML, RESULT_GROUPS_MD,
-                        RESULT_PATHS, SCENE_CLUSTER_HTML, SEMANTIC_META,
-                        TRAIN_SAMPLE_LIST, __version__)
+from .cache import clean_expired_cache, clean_invalid_cache, load_cache, merge_caches, save_cache
+from .cleanup import (
+    _run_execute_plan,
+    _run_gen_restore,
+    _run_list_operations,
+    _run_purge_operations,
+    _run_restore_operation,
+    _run_validate_plan,
+    export_audit_log,
+    generate_cleanup_script,
+)
+from .compare import _build_lsh_buckets, compute_similarity, find_similar_pairs, pre_filter_by_metadata
+from .constants import (
+    BAD_VIDEO_LIST,
+    CACHE_FILE,
+    CACHE_VERSION,
+    CLEAN_LIST_FILE,
+    CLEANUP_PLAN_FILE,
+    DATASET_CATALOG,
+    DATASET_STATS,
+    EXIT_BAD_ARGS,
+    EXIT_HAS_DUPLICATES,
+    EXIT_OK,
+    EXIT_PARSE_ERROR,
+    FAST_FRAMES,
+    FAST_THRESHOLD,
+    FFMPEG_AVAILABLE,
+    HASH_EXPORT,
+    RESULT_CSV,
+    RESULT_GROUPS,
+    RESULT_GROUPS_HTML,
+    RESULT_GROUPS_MD,
+    RESULT_PATHS,
+    SCENE_CLUSTER_HTML,
+    SEMANTIC_META,
+    TRAIN_SAMPLE_LIST,
+    __version__,
+)
 from .context import _APP_CTX, _get_memory_usage, log, log_close, log_init, repo_dir
-from .grouper import (_get_keep_strategy, build_groups)
-from .hasher import (extract_hashes_with_cache)
-from .reporter import (export_bad_paths, export_bad_videos, export_clean_list,
-                       export_csv, export_groups_html, export_groups_md,
-                       export_groups_txt, export_groups_xlsx, export_hash_backup,
-                       export_paths_list, export_summary_json, print_summary)
-from .scanner import (apply_duration_resolution_filter, apply_skip_low_quality,
-                      scan_mp4_files)
-from .utils import (_atomic_write_text, _normalize_path, _prefixed_path,
-                    _resolve_path)
-from .utils import _format_size  # noqa: F401  兼容层再导出（report_generator 等经 find_mp4 引用）
+from .grouper import _get_keep_strategy, build_groups
+from .hasher import extract_hashes_with_cache
+from .reporter import (
+    export_bad_paths,
+    export_bad_videos,
+    export_clean_list,
+    export_csv,
+    export_groups_html,
+    export_groups_md,
+    export_groups_txt,
+    export_groups_xlsx,
+    export_hash_backup,
+    export_paths_list,
+    export_summary_json,
+    print_summary,
+)
+from .scanner import apply_duration_resolution_filter, apply_skip_low_quality, scan_mp4_files
+from .utils import (
+    _atomic_write_text,
+    _format_size,  # noqa: F401  兼容层再导出（report_generator 等经 find_mp4 引用）
+    _normalize_path,
+    _prefixed_path,
+    _resolve_path,
+)
 
 # ai_semantic 模块（v2.2 AI 语义分析，可选）—— v2.9 起延迟加载：
 # torch 导入耗时约 8-10s，非 AI 路径（version/--help/纯哈希扫描）不应付出此代价。
@@ -907,8 +942,8 @@ def _run_semantic_analysis(
     if semantic_workers <= 0:
         semantic_workers = min(os.cpu_count() or 1, 4)  # 默认最多4线程
 
-    # v2.3 新增：加载外置标签配置
-    labels_config = load_dataset_labels()
+    # v2.3 新增：预读外置标签配置（缺失/损坏时在日志提示并回退默认标签）
+    load_dataset_labels()
 
     # 尝试从缓存加载已有语义数据
     cache = load_cache(cache_path) if use_cache else {"_version": CACHE_VERSION}
@@ -1016,7 +1051,6 @@ def _run_semantic_analyze(args):
     """执行纯语义分析子命令"""
     _APP_CTX.quiet_mode = args.quiet
     folder_path = _resolve_path(args.dir)
-    recursive = not args.no_recursive
 
     if args.output_dir:
         output_dir = _resolve_path(args.output_dir)
@@ -1061,8 +1095,7 @@ def _run_semantic_analyze(args):
 def _run_dataset_filter(args):
     """数据集筛选子命令"""
     _APP_CTX.quiet_mode = args.quiet
-    folder_path = _resolve_path(args.dir)
-    recursive = not args.no_recursive
+    _resolve_path(args.dir)  # 预检 --dir（None 时在此报错，保持原有行为）
     purpose_filter = args.purpose or getattr(args, "purpose_filter", "")
 
     if args.output_dir:
@@ -1116,8 +1149,7 @@ def _run_dataset_filter(args):
 def _run_cluster_scene(args):
     """场景聚类子命令"""
     _APP_CTX.quiet_mode = args.quiet
-    folder_path = _resolve_path(args.dir)
-    recursive = not args.no_recursive
+    _resolve_path(args.dir)  # 预检 --dir（None 时在此报错，保持原有行为）
 
     if args.output_dir:
         output_dir = _resolve_path(args.output_dir)
@@ -1368,9 +1400,9 @@ def _run_dataset_split(args):
     catalog_path = os.path.join(split_base, "split_catalog.txt")
     try:
         with open(catalog_path, "w", encoding="utf-8") as f:
-            f.write(f"# 数据集分类拆分清单\n")
+            f.write("# 数据集分类拆分清单\n")
             f.write(f"# 生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"# 格式: 用途\\t原路径\\t目标路径\\t大小\n\n")
+            f.write("# 格式: 用途\\t原路径\\t目标路径\\t大小\n\n")
             for line in catalog_lines:
                 f.write(line + "\n")
         log(f"[导出] 分类清单 → {catalog_path}", force=True)
@@ -1428,9 +1460,9 @@ def _run_test(args):
         assert len(conditions) == 2
         assert conditions[0] == (">=", 60.0)
         assert conditions[1] == ("<=", 360.0)
-        assert match_duration(120, conditions) == True
-        assert match_duration(30, conditions) == False
-        assert match_duration(400, conditions) == False
+        assert match_duration(120, conditions) is True
+        assert match_duration(30, conditions) is False
+        assert match_duration(400, conditions) is False
         passed += 1
         log("  [PASS] 时长筛选解析", force=True)
     except Exception as e:
@@ -1580,7 +1612,6 @@ def _run_auto_classify(args):
         sys.exit(EXIT_BAD_ARGS)
 
     folder_path = _resolve_path(args.dir)
-    recursive = not args.no_recursive
     output_dir = _resolve_path(args.output_dir) or os.path.join(folder_path, "_classify_output")
     dry_run = not getattr(args, "execute", False)
     n_clusters = getattr(args, "n_clusters", 0)
@@ -1610,7 +1641,7 @@ def _run_auto_classify(args):
         log(f"  筛选后剩余 {len(mp4_files)} 个视频", force=True)
 
     # 2. 加载/提取语义特征
-    log(f"\n[步骤2] 提取 AI 语义特征...", force=True)
+    log("\n[步骤2] 提取 AI 语义特征...", force=True)
     semantic_data = {}
     cache = load_cache(cache_path)
 
@@ -1645,8 +1676,7 @@ def _run_auto_classify(args):
     
     # 2.5 【v2.5 联动】低质量过滤
     if skip_low_quality:
-        log(f"\n[步骤2.5] 过滤低质量视频...", force=True)
-        before = len(mp4_files)
+        log("\n[步骤2.5] 过滤低质量视频...", force=True)
         mp4_files, semantic_data, removed = apply_skip_low_quality(
             mp4_files, semantic_data, log_fn=log
         )
@@ -1670,13 +1700,13 @@ def _run_auto_classify(args):
 
     # 4. 汇总
     log(f"\n{'='*60}", force=True)
-    log(f"  AI 自动分类完成", force=True)
+    log("  AI 自动分类完成", force=True)
     log(f"{'='*60}", force=True)
     log(f"  总视频数: {len(mp4_files)}", force=True)
     log(f"  分类数: {len(classify_result.get('cluster_names', {}))}", force=True)
     log(f"  报告路径: {classify_result.get('classify_report', '')}", force=True)
     if dry_run:
-        log(f"\n  [试运行] 未执行文件操作。如需执行，添加 --execute 参数。", force=True)
+        log("\n  [试运行] 未执行文件操作。如需执行，添加 --execute 参数。", force=True)
         log(f"  示例: python find_mp4.py auto-classify --dir {folder_path} --execute", force=True)
 
 

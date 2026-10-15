@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """分组与保留策略测试（模块：video_dedup.grouper）。"""
-from video_dedup.grouper import (_get_keep_strategy, _select_retain,
-                                 _split_group_min_sim, build_groups)
+from video_dedup.grouper import _get_keep_strategy, _select_retain, _split_group_min_sim, build_groups
 
 
 def mk_pair(a, b, sim):

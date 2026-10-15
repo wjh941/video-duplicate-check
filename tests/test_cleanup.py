@@ -6,15 +6,17 @@
 """
 import json
 import os
-import shutil
 import time
 from argparse import Namespace
 
-import pytest
-
-from video_dedup.cleanup import (_run_execute_plan, _run_gen_restore,
-                                 _run_list_operations, _run_purge_operations,
-                                 _run_restore_operation, _run_validate_plan)
+from video_dedup.cleanup import (
+    _run_execute_plan,
+    _run_gen_restore,
+    _run_list_operations,
+    _run_purge_operations,
+    _run_restore_operation,
+    _run_validate_plan,
+)
 
 EXIT_OK = 0
 EXIT_PARSE_ERROR = 2
@@ -146,8 +148,6 @@ class TestRestoreOperation:
 
     def test_confirm_restores_content(self, tmp_path):
         op_file, sources = self._execute_first(tmp_path)
-        original = {s: open(s, "rb").read() if os.path.exists(s) else None
-                    for s in sources}
         saved = json.loads(op_file.read_text(encoding="utf-8"))
         blobs = {o["source"]: open(o["target"], "rb").read()
                  for o in saved["operations"]}

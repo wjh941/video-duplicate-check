@@ -2,7 +2,6 @@
 """video_dedup.constants — 全局常量 / 输出文件名 / 错误码 / 退出码。"""
 import shutil
 
-
 # FFmpeg 探测
 FFMPEG_AVAILABLE = bool(shutil.which("ffmpeg"))
 

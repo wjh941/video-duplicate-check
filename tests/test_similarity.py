@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """相似度计算与阈值边界测试（模块：video_dedup.compare.compute_similarity）。"""
 import imagehash
-import pytest
 
 from video_dedup.compare import _hash_list_similarity, compute_similarity
 

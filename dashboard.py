@@ -17,9 +17,9 @@ dashboard.py - MP4 视频查重工具可视化看板 (基于 Streamlit)
 # ============================================================
 # 模块 0：依赖检测（仅使用标准库，缺失时给出 pip 安装提示）
 # ============================================================
-import sys
 import importlib
 import os
+import sys
 
 
 def _check_dep(install_name: str, import_name: str) -> bool:
@@ -55,23 +55,20 @@ if _MISSING:
 # ============================================================
 # 模块 1：第三方库导入
 # ============================================================
-import csv
-
-import review_tools
-
-import streamlit as st
-import plotly.express as px
-import plotly.graph_objects as go
-import pandas as pd
-import cv2
 import base64
+import csv
 import json
-import time
-import zipfile
 import subprocess
 import tempfile
-import shutil
-from typing import Optional, Any
+import time
+from typing import Any, Optional
+
+import cv2
+import pandas as pd
+import plotly.express as px
+import streamlit as st
+
+import review_tools
 
 # ============================================================
 # 模块 2：复用项目模块导入（失败时给出清晰提示，不崩溃）
@@ -84,19 +81,16 @@ _IMPORT_ERRORS: list[str] = []
 
 try:
     from find_mp4 import (
-        load_cache,
-        save_cache,
-        clean_invalid_cache,
-        clean_expired_cache,
-        merge_caches,
-        _resolve_path,
-        log,
-        parse_duration_filter,
-        match_duration,
-        CACHE_FILE,
-        SEMANTIC_META,
         AUDIT_LOG,
         BAD_VIDEO_LIST,
+        CACHE_FILE,
+        SEMANTIC_META,
+        _resolve_path,
+        clean_expired_cache,
+        clean_invalid_cache,
+        load_cache,
+        log,
+        merge_caches,
     )
     _FIND_MP4_OK = True
 except Exception as _e:  # noqa: BLE001
@@ -109,24 +103,24 @@ except Exception as _e:  # noqa: BLE001
 
 try:
     from report_generator import (
-        generate_full_report,
-        generate_space_report,
-        generate_quality_report,
-        archive_reports,
         _compute_duplicate_groups,
+        archive_reports,
+        generate_full_report,
+        generate_quality_report,
+        generate_space_report,
     )
     _REPORT_OK = True
 except Exception as _e:  # noqa: BLE001
     _IMPORT_ERRORS.append(f"report_generator 模块导入失败: {_e}")
 
 try:
-    from media_analyze import similar_search, analyze_space
+    from media_analyze import similar_search
     _MEDIA_OK = True
 except Exception as _e:  # noqa: BLE001
     _IMPORT_ERRORS.append(f"media_analyze 模块导入失败: {_e}")
 
 try:
-    from ai_semantic import load_clip_model, semantic_analyze_video
+    from ai_semantic import load_clip_model, semantic_analyze_video  # noqa: F401  兼作 _AI_OK 可用性探测
     _AI_OK = True
 except Exception as _e:  # noqa: BLE001
     _IMPORT_ERRORS.append(f"ai_semantic 模块导入失败: {_e}")
@@ -1318,7 +1312,6 @@ def render_review_workbench() -> None:
         st.success("已保存：%s（%d 条）｜ %s ｜ %s（可直接用于 --label-from csv 修正标签）"
                    % (csv_path, n, os.path.basename(md_path), os.path.basename(fixed_path)))
     if e2.button("⬇️ 下载复核结果 CSV", use_container_width=True) and n_done:
-        import io
         import tempfile
         tmp = os.path.join(tempfile.gettempdir(), "review_results.csv")
         review_tools.export_review_results(st.session_state.rv_verdicts, tmp)

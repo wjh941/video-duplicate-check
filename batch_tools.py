@@ -21,12 +21,12 @@ MP4 视频查重批量工具集 batch_tools.py
     或运行项目根目录 install.bat
 """
 
-import os
-import sys
-import json
-import shutil
 import argparse
 import base64
+import json
+import os
+import shutil
+import sys
 from collections import defaultdict
 from types import SimpleNamespace
 from typing import Optional
@@ -64,12 +64,11 @@ if _MISSING:
 try:
     import find_mp4
     from find_mp4 import (
-        log,                  # 日志输出（双输出：控制台 + 日志文件）
-        scan_mp4_files,       # 扫描视频文件
-        load_cache,           # 加载哈希缓存
-        merge_caches,         # 合并多个缓存
-        _resolve_path,        # 解析路径为绝对路径
-        CACHE_FILE,           # "video_hash_cache.json"
+        CACHE_FILE,  # "video_hash_cache.json"
+        _resolve_path,  # 解析路径为绝对路径
+        log,  # 日志输出（双输出：控制台 + 日志文件）
+        merge_caches,  # 合并多个缓存
+        scan_mp4_files,  # 扫描视频文件
     )
 except ImportError as _e:
     print("[batch_tools] 无法加载 find_mp4 模块，请确保 batch_tools.py 与 find_mp4.py 位于同一目录。")
@@ -224,7 +223,7 @@ def batch_scan(dir_list_file: str, output_dir: str, recursive: bool = True,
             mp4_files = scan_mp4_files(scan_args)
         except Exception as e:
             log(f"  [错误] 扫描失败: {e}", force=True)
-            per_dir_stats.append((dir_path, 0, f"扫描失败"))
+            per_dir_stats.append((dir_path, 0, "扫描失败"))
             continue
         all_files.extend(mp4_files)
         per_dir_stats.append((dir_path, len(mp4_files), "OK"))

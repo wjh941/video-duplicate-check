@@ -14,7 +14,6 @@ from .context import log, repo_dir
 from .utils import _format_size, _normalize_path, _parse_size_str, _resolve_path
 
 
-
 def _load_duplicateignore(folder_path: str) -> list[str]:
     """读取 .duplicateignore 文件返回排除规则列表"""
     ignore_path = os.path.join(folder_path, IGNORE_FILE)
@@ -218,14 +217,12 @@ def apply_skip_low_quality(
     扫描阶段直接过滤 AI 判定低质量模糊暗光视频，不参与后续查重。
     返回 (过滤后的 mp4_files, 过滤后的 semantic_results, 移除数量)。
     """
-    # 质量阈值：清晰度<0.3 或 亮度<0.2 视为低质量
+    # 质量阈值：清晰度质量分 < 0.3 视为低质量
     MIN_CLARITY = 0.3
-    MIN_BRIGHTNESS = 0.2
     removed = 0
     keep_indices = set()
     for i, sd in semantic_results.items():
         qs = sd.get("quality_score", 1.0)
-        conf = sd.get("semantic_conf", {})
         # 质量分过低或明确标记不适合训练
         if qs < MIN_CLARITY:
             removed += 1

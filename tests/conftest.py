@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """pytest 共享 fixture：用 OpenCV 现场合成测试视频，不依赖任何真实素材。"""
-import os
 import sys
 from pathlib import Path
 

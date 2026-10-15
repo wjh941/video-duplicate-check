@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """LSH 分桶逻辑测试（模块：video_dedup.compare._build_lsh_buckets + find_similar_pairs）。"""
 import imagehash
-import pytest
 
 from video_dedup.compare import _build_lsh_buckets, find_similar_pairs
 

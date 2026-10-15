@@ -34,6 +34,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install opencv-python-headless numpy Pillow imagehash tqdm psutil
           pip install pytest pytest-cov
+          pip install ruff==0.16.5
+
+      - name: Lint with ruff (E4/E7/E9+F+I, line-length 110, see ruff.toml)
+        run: ruff check .
 
       - name: Run test suite with coverage
         shell: bash

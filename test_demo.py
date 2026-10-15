@@ -9,11 +9,12 @@ MP4 视频查重工具 v2.6 自测脚本
 """
 
 import os
-import sys
 import shutil
+import sys
+import tempfile
+
 import cv2
 import numpy as np
-import tempfile
 
 # 测试结果统计
 _passed = 0
@@ -197,7 +198,7 @@ def test_cache_system():
     try:
         # 测试 load_dataset_labels
         sys.path.insert(0, '.')
-        from find_mp4 import load_dataset_labels, _normalize_path, clean_expired_cache
+        from find_mp4 import _normalize_path, load_dataset_labels
 
         labels = load_dataset_labels()
         if labels and "scene" in labels and "purpose_rules" in labels:
@@ -259,7 +260,7 @@ def test_lite_csv():
         _create_test_videos(test_dir)
 
         import subprocess
-        result = subprocess.run(
+        subprocess.run(
             [sys.executable, 'find_mp4.py', '--dir', test_dir,
              '--quiet', '--output-dir', output_dir, '--lite-csv'],
             capture_output=True, text=True, timeout=60

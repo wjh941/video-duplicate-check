@@ -4,9 +4,12 @@ from argparse import Namespace
 
 import pytest
 
-from video_dedup.scanner import (apply_duration_resolution_filter,
-                                 match_duration, parse_duration_filter,
-                                 scan_mp4_files)
+from video_dedup.scanner import (
+    apply_duration_resolution_filter,
+    match_duration,
+    parse_duration_filter,
+    scan_mp4_files,
+)
 
 
 class TestParseDurationFilter:

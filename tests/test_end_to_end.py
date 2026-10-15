@@ -2,7 +2,6 @@
 """端到端集成测试：合成视频 → 进程内调用 main() → 校验产物与退出码。"""
 import json
 import sys
-from argparse import Namespace
 
 import pytest
 

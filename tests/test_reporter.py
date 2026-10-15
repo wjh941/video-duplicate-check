@@ -8,9 +8,14 @@ import pytest
 from video_dedup.cleanup import generate_cleanup_script
 from video_dedup.grouper import build_groups
 from video_dedup.hasher import _detect_keyframes
-from video_dedup.reporter import (export_bad_paths, export_clean_list,
-                                  export_groups_html, export_groups_md,
-                                  export_groups_txt, export_hash_backup)
+from video_dedup.reporter import (
+    export_bad_paths,
+    export_clean_list,
+    export_groups_html,
+    export_groups_md,
+    export_groups_txt,
+    export_hash_backup,
+)
 from video_dedup.scanner import _match_ignore_rule
 
 

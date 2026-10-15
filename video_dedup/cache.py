@@ -15,7 +15,6 @@ from .context import log
 from .utils import _compute_file_md5
 
 
-
 def _migrate_cache_version(data: dict, old_version: str, new_version: str) -> Optional[dict]:
     """
     缓存版本自动迁移（v2.4 新增）。
@@ -149,7 +148,6 @@ def load_cache(cache_path: str) -> dict:
         num_chunks = data.get("_chunks", 0)
         if num_chunks and num_chunks > 0:
             base = os.path.splitext(cache_path)[0]
-            cache_dir = os.path.dirname(cache_path) or "."
             # 【改造】仅保留 _version，不复制 _chunks 避免元字段污染
             merged = {"_version": CACHE_VERSION}
             loaded_chunks = 0
