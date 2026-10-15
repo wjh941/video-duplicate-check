@@ -39,12 +39,12 @@ def _migrate_cache_version(data: dict, old_version: str, new_version: str) -> Op
                 continue
             if not isinstance(entry, dict):
                 continue
-            # 补全缺失字段（v2.4 新增字段默认值）
-            entry.setdefault("width", entry.get("width", 0))
-            entry.setdefault("height", entry.get("height", 0))
-            entry.setdefault("fps", entry.get("fps", 0))
-            entry.setdefault("audio", entry.get("audio"))
-            # v2.4 新增字段：默认为空，不强制添加
+            # 注：迁移只做"保留原字段 + 换版本号"。width/height/fps/audio 等
+            # 新版字段的缺省由读取方统一用 entry.get(key, 默认值) 兜底，
+            # 此处不做补写。历史上的 `entry.setdefault("width",
+            # entry.get("width", 0))` 系自我 setdefault（缺省时写入的正是
+            # 读取方同样的默认值），对下游行为没有任何影响，徒增缓存体积，
+            # 已删除。
             migrated[key] = entry
             migrated_count += 1
         log(f"  [缓存迁移] 成功迁移 {migrated_count} 条缓存记录")
