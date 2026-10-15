@@ -92,3 +92,15 @@ class TestEndToEndScan:
         code = run_main(monkeypatch, [
             "--dir", str(tmp_path), "--fast", "--double-check"])
         assert code == 3
+
+
+class TestHelpSubcommand:
+    def test_help_prints_subcommands_without_exception(self, monkeypatch, capsys):
+        """help 子命令此前声明而无处理器,会误入扫描路径抛 TypeError;现在应打印用法后正常返回。"""
+        from video_dedup.cli import main
+        monkeypatch.setattr(sys, "argv", ["find_mp4.py", "help"])
+        main()  # 不抛 SystemExit/TypeError 即通过
+        out = capsys.readouterr().out
+        for name in ("scan", "label-verify", "dashboard", "semantic-analyze"):
+            assert name in out
+        assert "用法示例" in out

@@ -315,23 +315,44 @@ def _build_shared_parser():
     return parser
 
 
+# 全部子命令(子命令模式判定与 help 输出共用一份,新增子命令务必同步)
+_SUBCOMMANDS = frozenset({
+    "scan", "clean-cache", "merge-cache", "verify-cache", "version", "help",
+    "validate-plan", "execute-plan", "restore-operation", "list-operations", "purge-operations",
+    "semantic-analyze", "dataset-filter", "cluster-scene",
+    "clear-semantic-cache", "dataset-split",
+    "duration-stat", "reload-labels", "test",
+    "auto-classify",  # 【v2.5 新增】AI 自动分类子命令
+    # 【v2.6 新增】可视化看板与拓展工具子命令（委托到独立模块）
+    "dashboard", "batch-scan", "media-info", "space-analyze",
+    "tag-manage", "similar-search", "export-snapshot", "diff-scan",
+    "full-report", "export-pdf", "diff-report", "quality-report",
+    "archive", "export-thumbnails", "backup-duplicates",
+    "replace-hardlinks", "organize", "extract-segments",
+    "label-verify", "pipeline",
+})
+
+
+def _print_help() -> None:
+    """help 子命令:打印共享参数与子命令清单。
+
+    此前 help 声明在子命令集合里但没有处理器,会误入扫描路径以 TypeError 崩溃。
+    """
+    parser = argparse.ArgumentParser(
+        description="MP4 视频相似度查重工具",
+        parents=[_build_shared_parser()],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.print_help()
+    print("\n可用子命令:")
+    for name in sorted(_SUBCOMMANDS):
+        print(f"  {name}")
+    print("\n用法示例: find_mp4.py scan <目录>  /  find_mp4.py <子命令> --help")
+
+
 def parse_args():
     """解析命令行参数（子命令 + 扁平参数兼容）"""
     shared = _build_shared_parser()
-
-    # 检查第一个有效参数是否为子命令
-    subcommands = {"scan", "clean-cache", "merge-cache", "verify-cache", "version", "help", "validate-plan", "execute-plan", "restore-operation", "list-operations", "purge-operations",
-                   "semantic-analyze", "dataset-filter", "cluster-scene",
-                   "clear-semantic-cache", "dataset-split",
-                   "duration-stat", "reload-labels", "test",
-                   "auto-classify",  # 【v2.5 新增】AI 自动分类子命令
-                   # 【v2.6 新增】可视化看板与拓展工具子命令（委托到独立模块）
-                   "dashboard", "batch-scan", "media-info", "space-analyze",
-                   "tag-manage", "similar-search", "export-snapshot", "diff-scan",
-                   "full-report", "export-pdf", "diff-report", "quality-report",
-                   "archive", "export-thumbnails", "backup-duplicates",
-                   "replace-hardlinks", "organize", "extract-segments",
-                   "label-verify", "pipeline"}
 
     # 提取第一个非flag参数来判断模式
     first_arg = None
@@ -340,7 +361,7 @@ def parse_args():
             first_arg = arg
             break
 
-    is_subcommand = first_arg in subcommands
+    is_subcommand = first_arg in _SUBCOMMANDS
 
     if not is_subcommand:
         # 扁平参数模式（v2.0 兼容）
@@ -1835,6 +1856,11 @@ def main():
     # --version
     if cmd == "version" or args.version:
         _print_version()
+        return
+
+    # help 子命令:打印总用法后正常退出(不走扫描路径)
+    if cmd == "help":
+        _print_help()
         return
 
     # --clean-cache
