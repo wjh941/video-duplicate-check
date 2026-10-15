@@ -1,39 +1,11 @@
 # -*- coding: utf-8 -*-
-"""video_dedup — 由 find_mp4.py v2.8 按职责拆分生成的模块。"""
+"""video_dedup.compare — 相似度比对：双哈希加权融合、时长预筛、LSH 多 band 分桶与候选对生成。"""
 from __future__ import annotations
 
-import argparse
-import base64
-import configparser
-import csv
-import fnmatch
-import glob as _glob
-import io
-import json
-import math
-import os
-import re
-import shutil
-import signal
-import sqlite3
-import subprocess
-import sys
-import tempfile
-import threading
-import time
-import traceback
-import uuid
 from collections import defaultdict
-from concurrent.futures import (ThreadPoolExecutor, as_completed, wait,
-                                FIRST_COMPLETED,
-                                TimeoutError as FutureTimeout)
-from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
-import cv2
 import numpy as np
-from PIL import Image
-import imagehash
 
 try:  # tqdm 可选
     from tqdm import tqdm as _tqdm
@@ -41,13 +13,7 @@ try:  # tqdm 可选
 except ImportError:  # pragma: no cover
     TQDM_AVAILABLE = False
 
-try:  # psutil 可选
-    import psutil
-    PSUTIL_AVAILABLE = True
-except ImportError:  # pragma: no cover
-    PSUTIL_AVAILABLE = False
-
-from .constants import *  # noqa: F401,F403
+from .constants import HASH_SIZE
 from .context import log
 
 

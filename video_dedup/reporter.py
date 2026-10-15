@@ -1,57 +1,22 @@
 # -*- coding: utf-8 -*-
-"""video_dedup — 由 find_mp4.py v2.8 按职责拆分生成的模块。"""
+"""video_dedup.reporter — 结果导出与汇总：CSV/TXT/MD/HTML/XLSX 报告、缩略图、扫描摘要与终端汇总。"""
 from __future__ import annotations
 
-import argparse
 import base64
-import configparser
 import csv
-import fnmatch
-import glob as _glob
 import io
 import json
-import math
 import os
-import re
-import shutil
-import signal
-import sqlite3
-import subprocess
-import sys
-import tempfile
-import threading
 import time
-import traceback
-import uuid
-from collections import defaultdict
-from concurrent.futures import (ThreadPoolExecutor, as_completed, wait,
-                                FIRST_COMPLETED,
-                                TimeoutError as FutureTimeout)
-from pathlib import Path
-from typing import Any, Optional
 
 import cv2
-import numpy as np
-from PIL import Image
-import imagehash
 
-try:  # tqdm 可选
-    from tqdm import tqdm as _tqdm
-    TQDM_AVAILABLE = True
-except ImportError:  # pragma: no cover
-    TQDM_AVAILABLE = False
-
-try:  # psutil 可选
-    import psutil
-    PSUTIL_AVAILABLE = True
-except ImportError:  # pragma: no cover
-    PSUTIL_AVAILABLE = False
-
-from .constants import *  # noqa: F401,F403
-from .context import log, _APP_CTX, _get_memory_usage
-from .utils import (_atomic_write_text, _atomic_write_lines,
-                    _prefixed_path, _format_size, _normalize_path)
+from .constants import (ERR_DECODE_ERROR, ERR_DISK_ERROR, ERR_LOW_QUALITY,
+                        ERR_PERMISSION, ERR_READ_FAILED, ERR_TIMEOUT,
+                        ERR_ZERO_FRAMES)
+from .context import _get_memory_usage, log
 from .hasher import _video_quality_score
+from .utils import _atomic_write_text, _format_size
 
 
 

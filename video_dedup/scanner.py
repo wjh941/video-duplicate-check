@@ -1,57 +1,17 @@
 # -*- coding: utf-8 -*-
-"""video_dedup — 由 find_mp4.py v2.8 按职责拆分生成的模块。"""
+"""video_dedup.scanner — 目录扫描与文件发现：ignore 规则、大小限制与时长/分辨率/低质量过滤。"""
 from __future__ import annotations
 
-import argparse
-import base64
-import configparser
-import csv
 import fnmatch
-import glob as _glob
-import io
-import json
-import math
 import os
-import re
-import shutil
-import signal
-import sqlite3
-import subprocess
-import sys
-import tempfile
-import threading
-import time
-import traceback
-import uuid
-from collections import defaultdict
-from concurrent.futures import (ThreadPoolExecutor, as_completed, wait,
-                                FIRST_COMPLETED,
-                                TimeoutError as FutureTimeout)
 from pathlib import Path
-from typing import Any, Optional
 
 import cv2
-import numpy as np
-from PIL import Image
-import imagehash
 
-try:  # tqdm 可选
-    from tqdm import tqdm as _tqdm
-    TQDM_AVAILABLE = True
-except ImportError:  # pragma: no cover
-    TQDM_AVAILABLE = False
-
-try:  # psutil 可选
-    import psutil
-    PSUTIL_AVAILABLE = True
-except ImportError:  # pragma: no cover
-    PSUTIL_AVAILABLE = False
-
-from .constants import *  # noqa: F401,F403
-from .context import log, repo_dir
-from .utils import (_resolve_path, _parse_size_str, _format_size,
-                    _normalize_path)
 from .cache import load_cache
+from .constants import FFMPEG_AVAILABLE, GLOBAL_IGNORE_FILE, IGNORE_FILE
+from .context import log, repo_dir
+from .utils import _format_size, _normalize_path, _parse_size_str, _resolve_path
 
 
 

@@ -1,39 +1,24 @@
 # -*- coding: utf-8 -*-
-"""video_dedup — 由 find_mp4.py v2.8 按职责拆分生成的模块。"""
+"""video_dedup.cli — argparse 命令行入口：子命令分发、参数校验、AI 延迟加载与主扫描流程编排。"""
 from __future__ import annotations
 
 import argparse
-import base64
 import configparser
-import csv
-import fnmatch
-import glob as _glob
-import io
 import json
-import math
 import os
-import re
 import shutil
 import signal
-import sqlite3
-import subprocess
 import sys
 import tempfile
-import threading
 import time
 import traceback
-import uuid
 from collections import defaultdict
-from concurrent.futures import (ThreadPoolExecutor, as_completed, wait,
-                                FIRST_COMPLETED,
-                                TimeoutError as FutureTimeout)
-from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import cv2
+import imagehash
 import numpy as np
 from PIL import Image
-import imagehash
 
 try:  # tqdm 可选
     from tqdm import tqdm as _tqdm
@@ -42,43 +27,41 @@ except ImportError:  # pragma: no cover
     TQDM_AVAILABLE = False
 
 try:  # psutil 可选
-    import psutil
+    import psutil  # noqa: F401  仅作可用性探测（PSUTIL_AVAILABLE）
     PSUTIL_AVAILABLE = True
 except ImportError:  # pragma: no cover
     PSUTIL_AVAILABLE = False
 
-from .constants import *  # noqa: F401,F403
-from .constants import __version__  # noqa: F401  (star import 跳过下划线名)
-from .context import log, log_init, log_close, _APP_CTX, repo_dir, _get_memory_usage
-from .utils import (_resolve_path, _parse_size_str, _format_size,
-                    _normalize_path, _atomic_write_text, _atomic_write_lines,
-                    _prefixed_path)
-from .scanner import (scan_mp4_files, parse_duration_filter, match_duration,
-                      apply_duration_resolution_filter, apply_skip_low_quality,
-                      _load_duplicateignore, _load_globalignore, _match_ignore_rule)
-from .cache import (load_cache, save_cache, is_cache_valid, clean_expired_cache,
-                    clean_invalid_cache, merge_caches, save_scan_progress,
-                    load_scan_progress, clear_scan_progress)
-from .hasher import (extract_hashes_with_cache, _compute_frame_hashes,
-                     _compute_file_sha256, _compute_file_md5, _detect_keyframes,
-                     _extract_audio_hash, _extract_hashes_single,
-                     _video_quality_score)
-from .compare import (compute_similarity, _hash_list_similarity,
-                      _build_lsh_buckets, find_similar_pairs,
+# 说明：本模块命名空间是 find_mp4.py 兼容层的聚合来源（`from find_mp4 import X`）。
+# 下列导入以内部使用为主；带 noqa 的名字是仅为兼容层保留的再导出，勿随意删除。
+from .cache import (clean_expired_cache, clean_invalid_cache, load_cache,
+                    merge_caches, save_cache)
+from .cleanup import (_run_execute_plan, _run_gen_restore, _run_list_operations,
+                      _run_purge_operations, _run_restore_operation,
+                      _run_validate_plan, export_audit_log,
+                      generate_cleanup_script)
+from .compare import (_build_lsh_buckets, compute_similarity, find_similar_pairs,
                       pre_filter_by_metadata)
-from .grouper import (build_groups, _split_group_min_sim, _select_retain,
-                      _get_keep_strategy)
-from .reporter import (export_csv, export_bad_paths, export_groups_txt,
-                       export_groups_md, export_groups_html, export_groups_xlsx,
-                       export_paths_list, export_clean_list, export_bad_videos,
-                       export_hash_backup, export_summary_json, print_summary,
-                       _extract_video_thumbnail_base64, _similarity_level,
-                       _summary_extensions, _summary_quality_buckets,
-                       _summary_exit_status)
-from .cleanup import (_run_execute_plan, _run_purge_operations,
-                      _run_list_operations, _run_restore_operation,
-                      _run_validate_plan, _run_gen_restore,
-                      generate_cleanup_script, export_audit_log)
+from .constants import (BAD_VIDEO_LIST, CACHE_FILE, CACHE_VERSION,
+                        CLEANUP_PLAN_FILE, CLEAN_LIST_FILE, DATASET_CATALOG,
+                        DATASET_STATS, EXIT_BAD_ARGS, EXIT_HAS_DUPLICATES,
+                        EXIT_OK, EXIT_PARSE_ERROR, FAST_FRAMES, FAST_THRESHOLD,
+                        FFMPEG_AVAILABLE, HASH_EXPORT, RESULT_CSV,
+                        RESULT_GROUPS, RESULT_GROUPS_HTML, RESULT_GROUPS_MD,
+                        RESULT_PATHS, SCENE_CLUSTER_HTML, SEMANTIC_META,
+                        TRAIN_SAMPLE_LIST, __version__)
+from .context import _APP_CTX, _get_memory_usage, log, log_close, log_init, repo_dir
+from .grouper import (_get_keep_strategy, build_groups)
+from .hasher import (extract_hashes_with_cache)
+from .reporter import (export_bad_paths, export_bad_videos, export_clean_list,
+                       export_csv, export_groups_html, export_groups_md,
+                       export_groups_txt, export_groups_xlsx, export_hash_backup,
+                       export_paths_list, export_summary_json, print_summary)
+from .scanner import (apply_duration_resolution_filter, apply_skip_low_quality,
+                      scan_mp4_files)
+from .utils import (_atomic_write_text, _normalize_path, _prefixed_path,
+                    _resolve_path)
+from .utils import _format_size  # noqa: F401  兼容层再导出（report_generator 等经 find_mp4 引用）
 
 # ai_semantic 模块（v2.2 AI 语义分析，可选）—— v2.9 起延迟加载：
 # torch 导入耗时约 8-10s，非 AI 路径（version/--help/纯哈希扫描）不应付出此代价。
