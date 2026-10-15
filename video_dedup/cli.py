@@ -66,7 +66,8 @@ from .utils import _format_size  # noqa: F401  兼容层再导出（report_gener
 # ai_semantic 模块（v2.2 AI 语义分析，可选）—— v2.9 起延迟加载：
 # torch 导入耗时约 8-10s，非 AI 路径（version/--help/纯哈希扫描）不应付出此代价。
 # _ai_probe() 仅用 find_spec 探测依赖是否安装（毫秒级）；
-# _ai_mod() 在真正调用 CLIP/语义接口时才导入 ai_semantic。
+# _ai_mod() 在真正调用 CLIP/语义接口时才导入 video_dedup.ai_semantic。
+# 根目录 ai_semantic.py 只是兼容瘦壳，不再是实现所在。
 _AI_STATE = {"loaded": False, "ok": False, "torch_ok": False,
              "clip_ok": False, "sklearn_ok": False, "cuda_ok": False}
 _AI_MODULE_OBJ = None
@@ -85,7 +86,9 @@ def _ai_probe() -> dict:
 
         _AI_STATE.update({
             "loaded": True,
-            "ok": _has("ai_semantic") and _has("torch") and _has("open_clip"),
+            # 实现随包分发（video_dedup.ai_semantic 恒存在），可用性只取决于
+            # torch / open_clip 是否安装。
+            "ok": _has("torch") and _has("open_clip"),
             "torch_ok": _has("torch"),
             "clip_ok": _has("open_clip"),
             "sklearn_ok": _has("sklearn"),
@@ -95,11 +98,11 @@ def _ai_probe() -> dict:
 
 
 def _ai_mod():
-    """按需导入 ai_semantic 模块；失败返回 None（纯哈希模式降级）。"""
+    """按需导入 video_dedup.ai_semantic；失败返回 None（纯哈希模式降级）。"""
     global _AI_MODULE_OBJ
     if _AI_MODULE_OBJ is None:
         try:
-            import ai_semantic as _m
+            from video_dedup import ai_semantic as _m
         except ImportError:
             _AI_MODULE_OBJ = False
             return None
@@ -1652,7 +1655,7 @@ def _run_auto_classify(args):
 
     # 3. 执行自动分类
     log(f"\n[步骤3] AI 自动分类 (方法={classify_method}, 聚类数={n_clusters or '自动'})...", force=True)
-    from ai_semantic import auto_classify_videos
+    from video_dedup.ai_semantic import auto_classify_videos
     
     classify_result = auto_classify_videos(
         semantic_data=semantic_data,

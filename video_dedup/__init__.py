@@ -29,8 +29,9 @@ for _stream in (_sys.stdout, _sys.stderr):
     except (AttributeError, ValueError, OSError):
         pass
 
-# 保证仓库根目录在 sys.path 中：兄弟模块 ai_semantic.py / label_verify.py
-# 仍是可独立运行的顶层脚本，包内以顶层模块名导入它们。
+# 保证仓库根目录在 sys.path 中：根目录的 ai_semantic.py / label_verify.py /
+# find_mp4.py 现在都是瘦壳兼容入口（实现已在包内），但旧用法可能先导入本包、
+# 再按顶层模块名导入它们，这里兜底保证这种混用仍然可用。
 _REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
 if _REPO_ROOT not in _sys.path:
     _sys.path.insert(0, _REPO_ROOT)

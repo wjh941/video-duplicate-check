@@ -1,0 +1,12 @@
+# Ruff 代码卫生检查配置（v2.9 清理引入）。
+# 规则集刻意保守：只查错误级语法/语义问题（E4/E7/E9）、死代码（F）与导入顺序（I），
+# 不做风格强制（缩进、命名等交给团队约定），避免对遗留根目录脚本产生噪音。
+line-length = 110
+target-version = "py39"
+extend-exclude = ["docs"]
+
+[lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[lint.isort]
+known-first-party = ["video_dedup"]
