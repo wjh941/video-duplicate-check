@@ -339,7 +339,7 @@ def scan_mp4_files(args) -> list[dict]:
         except PermissionError:
             skipped_perm += 1
             continue
-        if any(part in skip_dirs for part in file_path.parts):
+        if any(part.lower() in skip_dirs for part in file_path.parts):
             continue
         if file_path.name.startswith(".") or file_path.name.startswith("~$"):
             continue

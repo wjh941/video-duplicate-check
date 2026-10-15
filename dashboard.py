@@ -47,7 +47,7 @@ if _MISSING:
         print(f"    pip install {_d}")
     print("或使用国内镜像加速：")
     print("    pip install " + " ".join(_MISSING) +
-          " -i https://pypi.tunainghua.edu.cn/simple")
+          " -i https://pypi.tuna.tsinghua.edu.cn/simple")
     # 缺失依赖时直接退出，避免后续 import 报错
     sys.exit(1)
 
