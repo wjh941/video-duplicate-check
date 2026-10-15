@@ -299,9 +299,11 @@ def extract_hashes_with_cache(
                     "fps": entry.get("fps", 0),
                     "audio": [imagehash.hex_to_hash(h) for h in entry["audio"]] if entry.get("audio") else None,
                 }
-                # 增量模式下跳过有效文件
-                if incremental and not entry.get("_modified", False):
-                    continue
+                # 注：增量模式（--incremental）无需额外跳过逻辑——命中有效缓存的
+                # 文件本来就不进入 to_compute，天然不会重复计算。历史上这里有
+                # 一段 `if incremental and not entry.get("_modified", False):
+                # continue`，但 _modified 从未被写入，且 continue 位于循环体
+                # 末尾没有实际效果，属死代码，已删除。
             except Exception:
                 to_compute[i] = file_info
         else:
