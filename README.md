@@ -4,6 +4,26 @@
 
 ![video-duplicate-check 处理流水线：使用入口（CLI/一键体检/看板/批量工具）→ 扫描过滤 → pHash+dHash 哈希提取 → LSH 候选与融合比对 → 连通图分组 → 报告导出 → 安全清理；旁挂哈希缓存、config.ini、音频哈希与 CLIP 可选增强](docs/architecture.svg)
 
+## 🖼️ 效果预览
+
+零配置验证安装完整性——内置自检与版本信息：
+
+```text
+$ python find_mp4.py version
+[2026-10-16] MP4 视频相似度查重工具 v2.9.0
+[2026-10-16] Python: 3.11.0 · OpenCV: 5.0.0 · NumPy: 2.4.6 · imagehash: 4.3.2
+
+$ python find_mp4.py test
+  [PASS] LSH分桶均匀性
+  [PASS] 时长筛选解析
+  [PASS] 相似度计算 (sim=1.0000)
+  [PASS] 路径标准化
+  [PASS] 缓存读写
+  测试结果: 5 通过 / 0 失败
+```
+
+完整扫描输出 TXT / MD / HTML / XLSX / CSV 五种报告 + 「校验 → 预览 → 确认 → 可恢复」安全清理方案（见下方主流程）。
+
 ## 主流程
 
 ```mermaid
