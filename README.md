@@ -1,5 +1,7 @@
 # MP4 视频相似度查重工具
 
+> **“磁盘空间总是会被填满的。”** —— 存储墨菲定律
+
 基于感知哈希（pHash + dHash）的本地视频重复检测命令行工具：扫描指定目录，找出画面相似或重复的视频，生成对比报告和可恢复的安全清理方案。适合清理手机、相机、NAS 中堆积的重复素材，也支持为计算机视觉训练集做去重和标注。可选启用 CLIP 语义分析、Streamlit 可视化看板、批量处理与报告生成工具。
 
 ![video-duplicate-check 处理流水线：使用入口（CLI/一键体检/看板/批量工具）→ 扫描过滤 → pHash+dHash 哈希提取 → LSH 候选与融合比对 → 连通图分组 → 报告导出 → 安全清理；旁挂哈希缓存、config.ini、音频哈希与 CLIP 可选增强](docs/architecture.svg)
@@ -109,6 +111,21 @@ video-duplicate-check/
 ```
 
 `find_mp4.py` 内置子命令：`scan`（默认，可省略）、`clean-cache`、`merge-cache`、`verify-cache`、`version`、`validate-plan`、`execute-plan`、`restore-operation`、`list-operations`、`purge-operations`、`semantic-analyze`、`dataset-filter`、`cluster-scene`、`clear-semantic-cache`、`dataset-split`、`duration-stat`、`reload-labels`、`test`、`auto-classify`、`dashboard`。其中 v2.6 的扩展工具子命令（`batch-scan`、`media-info`、`full-report` 等）只是转发到独立模块，实际可用形式见下文「扩展工具」。
+
+## 🆚 与同类工具的对比
+
+同类知名项目：[czkawka](https://github.com/qarmin/czkawka)（Rust，文件/图片/音乐/视频全品类）、[fclones](https://github.com/pkolaczn/fclones)（Rust CLI）。
+
+| 维度 | 本项目 | czkawka / fclones |
+| --- | --- | --- |
+| 视频专用感知查重（pHash+dHash 分帧融合） | ✅ 核心能力 | ✅（czkawka 支持按帧/音频相似） |
+| 中文报告 + 安全清理流（校验→预览→确认→可恢复） | ✅ | 部分需手动处理 |
+| 保留策略（最新 / 最高分辨率 / 最高码率 / 最大体积） | ✅ 内置四档 | czkawka 提供选择辅助 |
+| 图片 / 音乐查重 | ❌ 专注视频 | ✅ |
+| 性能 | Python 量级 | Rust 量级 |
+| CLIP 语义分析 / 训练集标注一致性验证 | ✅ 可选模块 | ❌ |
+
+> 选型建议：追求跨品类与极限性能选 czkawka；只处理视频、需要中文报告与安全清理闭环、或为 CV 训练集做去重与标注验证，用本项目。
 
 ## 环境要求
 
