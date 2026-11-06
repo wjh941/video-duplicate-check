@@ -114,7 +114,7 @@ video-duplicate-check/
 
 ## 🆚 与同类工具的对比
 
-同类知名项目：[czkawka](https://github.com/qarmin/czkawka)（Rust，文件/图片/音乐/视频全品类）、[fclones](https://github.com/pkolaczn/fclones)（Rust CLI）。
+同类知名项目：[czkawka](https://github.com/qarmin/czkawka)（Rust，文件/图片/音乐/视频全品类）、[fclones](https://github.com/pkolaczk/fclones)（Rust CLI，原 pkolaczn/fclones 已改名）。
 
 | 维度 | 本项目 | czkawka / fclones |
 | --- | --- | --- |
